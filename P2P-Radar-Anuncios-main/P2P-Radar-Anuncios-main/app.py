@@ -741,9 +741,9 @@ def main() -> None:
                 id_options = real_ids if real_ids else [res_pm["name"]]
                 sel_real_id  = add2_col1.selectbox("ID real en Binance", id_options, key="pm_add_real_id")
                 add2_name    = add2_col2.text_input("Nombre visible", value=res_pm["name"], key="pm_add_name")
-                add2_fiat    = add2_col3.selectbox("Moneda", ["USD", "ARS", "EUR", "UYU"],
-                                                   index=["USD","ARS","EUR","UYU"].index(res_pm["fiat"])
-                                                   if res_pm["fiat"] in ["USD","ARS","EUR","UYU"] else 0,
+                add2_fiat    = add2_col3.selectbox("Moneda", ["USD", "ARS", "EUR", "UYU", "COP"],
+                                                   index=["USD","ARS","EUR","UYU","COP"].index(res_pm["fiat"])
+                                                   if res_pm["fiat"] in ["USD","ARS","EUR","UYU","COP"] else 0,
                                                    key="pm_add_fiat")
                 if st.button("➕ Agregar al radar", type="primary", key="pm_add_btn"):
                     method_id = sel_real_id.lower().replace(" ", "_").replace("-", "_")
@@ -845,9 +845,9 @@ def main() -> None:
             # Auto-detect fiat from the combined results
             auto_fiat = next((r["Moneda"] for r in combined if r["Método de pago"] == sel_pm), disc_fiat_sel)
             add_name = add_col2.text_input("Nombre visible", value=sel_pm, key="add_name")
-            add_fiat = add_col3.selectbox("Moneda", ["USD", "ARS", "EUR", "UYU"],
-                                          index=["USD","ARS","EUR","UYU"].index(auto_fiat)
-                                          if auto_fiat in ["USD","ARS","EUR","UYU"] else 0,
+            add_fiat = add_col3.selectbox("Moneda", ["USD", "ARS", "EUR", "UYU", "COP"],
+                                          index=["USD","ARS","EUR","UYU","COP"].index(auto_fiat)
+                                          if auto_fiat in ["USD","ARS","EUR","UYU","COP"] else 0,
                                           key="add_fiat")
 
             if st.button("➕ Agregar al radar", type="primary", key="add_method_btn"):
