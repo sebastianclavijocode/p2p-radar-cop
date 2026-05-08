@@ -55,6 +55,7 @@ BINANCE_MAKER_FEES: Dict[str, Dict[str, float]] = {
     "ARS": {"verified": 0.16, "non_verified": 0.20},
     "EUR": {"verified": 0.0,  "non_verified": 0.0},
     "UYU": {"verified": 0.16, "non_verified": 0.20},
+    "COP": {"verified": 0.16, "non_verified": 0.20},
 }
 
 DEFAULT_CAPITAL: Dict[str, Dict] = {
@@ -62,6 +63,7 @@ DEFAULT_CAPITAL: Dict[str, Dict] = {
     "USD": {"target_min": 200,     "target_max": 2_000,     "simulado": 500},
     "EUR": {"target_min": 200,     "target_max": 2_000,     "simulado": 500},
     "UYU": {"target_min": 8_000,   "target_max": 80_000,    "simulado": 20_000},
+    "COP": {"target_min": 800_000, "target_max": 8_000_000, "simulado": 2_000_000},
 }
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -513,7 +515,7 @@ def main() -> None:
         )
 
         sc1, sc2, sc3 = st.columns(3)
-        scan_fiats   = sc1.multiselect("Monedas", ["USD", "EUR", "ARS", "UYU"], default=["USD", "EUR"], key="scan_fiats")
+        scan_fiats   = sc1.multiselect("Monedas", ["USD", "EUR", "ARS", "UYU", "COP"], default=["USD", "EUR"], key="scan_fiats")
         scan_min_net = sc2.number_input("Umbral net (%)", -50.0, 50.0, 0.0, 0.05, "%.2f", key="scan_min")
         scan_rows    = sc3.slider("Ads por lado", 10, 50, 20, key="scan_rows")
 
@@ -675,7 +677,7 @@ def main() -> None:
             placeholder="Ej: WallyTech, Zinli, Facebank...",
             key="pm_search_name",
         )
-        pm_search_fiat = pm_col2.selectbox("Moneda", ["USD", "ARS", "EUR", "UYU"], key="pm_search_fiat")
+        pm_search_fiat = pm_col2.selectbox("Moneda", ["USD", "ARS", "EUR", "UYU", "COP"], key="pm_search_fiat")
         pm_search_rows = pm_col3.slider("Ads a traer", 10, 50, 20, key="pm_search_rows")
 
         if st.button("🔎 Buscar método", type="primary", key="pm_search_btn"):
