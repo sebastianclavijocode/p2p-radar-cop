@@ -55,7 +55,7 @@ BINANCE_MAKER_FEES: Dict[str, Dict[str, float]] = {
     "ARS": {"verified": 0.16, "non_verified": 0.20},
     "EUR": {"verified": 0.0,  "non_verified": 0.0},
     "UYU": {"verified": 0.16, "non_verified": 0.20},
-    "COP": {"verified": 0.16, "non_verified": 0.20},
+    "COP": {"verified": 0.25, "non_verified": 0.25},
 }
 
 DEFAULT_CAPITAL: Dict[str, Dict] = {
@@ -767,7 +767,7 @@ def main() -> None:
         )
         disc_fiats = st.multiselect(
             "Monedas a escanear",
-            ["USD", "EUR", "ARS", "UYU"],
+            ["USD", "EUR", "ARS", "UYU", "COP"],
             default=["USD"],
             key="disc_fiats",
             help="Seleccioná una o varias monedas. Cada moneda hace 2 consultas a Binance."
