@@ -620,20 +620,24 @@ def main() -> None:
                 if not ad or not ad.payment_methods: return "—"
                 return ", ".join([m for m in ad.payment_methods if m][:5])
             pct = r.net_profit_pct or 0
+            sep = "─" * 28
             return (
-                f"🤖 Alerta P2P Radar\n"
+                f"🤖 ALERTA P2P RADAR\n"
+                f"{sep}\n"
                 f"💰 Ganancia neta: {pct:.2f}%\n"
-                f"💱 Método: {r.method_human} ({r.fiat})\n\n"
-                f"COMPRA (tab Comprar):\n"
-                f"🏷️ {buy.advertiser_name if buy else '—'}\n"
+                f"💱 {r.method_human} ({r.fiat})\n"
+                f"{sep}\n"
+                f"📗 COMPRAR (tab Comprar)\n"
+                f"👤 {buy.advertiser_name if buy else '—'}\n"
                 f"💵 Precio: {_fmt(r.buy_price_effective, r.fiat)} / {r.asset}\n"
                 f"🔴 Límite: {f'{buy.min_amount:,.0f}' if buy else '—'} – {f'{buy.max_amount:,.0f}' if buy else '—'} {r.fiat}\n"
-                f"🟰 Métodos: {pays(buy)}\n\n"
-                f"VENTA (tab Vender):\n"
-                f"🏷️ {sell.advertiser_name if sell else '—'}\n"
+                f"💳 Métodos: {pays(buy)}\n"
+                f"{sep}\n"
+                f"📕 VENDER (tab Vender)\n"
+                f"👤 {sell.advertiser_name if sell else '—'}\n"
                 f"💵 Precio: {_fmt(r.sell_price_effective, r.fiat)} / {r.asset}\n"
                 f"🔴 Límite: {f'{sell.min_amount:,.0f}' if sell else '—'} – {f'{sell.max_amount:,.0f}' if sell else '—'} {r.fiat}\n"
-                f"🟰 Métodos: {pays(sell)}"
+                f"💳 Métodos: {pays(sell)}"
             )
 
         def _send_telegram(username: str, _unused: str, text: str) -> bool:
