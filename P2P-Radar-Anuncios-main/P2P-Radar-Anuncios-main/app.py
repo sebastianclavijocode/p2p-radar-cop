@@ -1056,9 +1056,24 @@ def main() -> None:
         if custom_active:
             st.divider()
             st.markdown("**Métodos personalizados activos**")
-            rows_c = [{"Método": m["human_name"], "Fiat": m["fiat"], "ID Binance": m["_payment_id"]} for m in custom_active]
-            from ui.table import _html_table
-            st.markdown(_html_table(rows_c), unsafe_allow_html=True)
+            header = st.columns([3, 1, 2, 1])
+            header[0].markdown("**Método**")
+            header[1].markdown("**Fiat**")
+            header[2].markdown("**ID Binance**")
+            header[3].markdown("")
+            to_delete = None
+            for i, m in enumerate(custom_active):
+                cols = st.columns([3, 1, 2, 1])
+                cols[0].write(m["human_name"])
+                cols[1].write(m["fiat"])
+                cols[2].write(m["_payment_id"])
+                if cols[3].button("🗑️", key=f"del_m_{i}", help=f"Eliminar {m['human_name']}"):
+                    to_delete = i
+            if to_delete is not None:
+                custom_active.pop(to_delete)
+                save_custom_methods(custom_active)
+                st.session_state["custom_methods"] = custom_active
+                st.rerun()
             if st.button("🗑️ Eliminar todos los personalizados", key="del_custom"):
                 st.session_state["custom_methods"] = []
                 save_custom_methods([])
