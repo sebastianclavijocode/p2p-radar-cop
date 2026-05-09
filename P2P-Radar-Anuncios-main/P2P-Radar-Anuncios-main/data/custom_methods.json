@@ -19,5 +19,33 @@
     "fiat": "USD",
     "_payment_id": "GrabrFi",
     "_exchange": "Binance"
+  },
+  {
+    "id": "bancolombia_cop_custom",
+    "human_name": "Bancolombia",
+    "fiat": "COP",
+    "_payment_id": "BancolombiaSA",
+    "_exchange": "Binance"
+  },
+  {
+    "id": "nequi_cop_custom",
+    "human_name": "Nequi",
+    "fiat": "COP",
+    "_payment_id": "Nequi",
+    "_exchange": "Binance"
+  },
+  {
+    "id": "daviplata_cop_custom",
+    "human_name": "Daviplata",
+    "fiat": "COP",
+    "_payment_id": "Daviplata",
+    "_exchange": "Binance"
+  },
+  {
+    "id": "breb_cop_custom",
+    "human_name": "Llaves Bre-B",
+    "fiat": "COP",
+    "_payment_id": "BreBKeys",
+    "_exchange": "Binance"
   }
 ]
