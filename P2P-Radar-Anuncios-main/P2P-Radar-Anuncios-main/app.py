@@ -111,10 +111,8 @@ def run_queries(
                     f"Cambiá el exchange o agregá el método desde {method_exchange}."
                 ))
                 continue
-            if mid not in mappings.get(ex_key, {}):
-                method_cfg = {"payment_ids": [method["_payment_id"]], "available": True}
-            else:
-                method_cfg = mappings.get(ex_key, {}).get(mid, {})
+            # Siempre usar _payment_id para métodos custom, sin importar si el ID está en mappings
+            method_cfg = {"payment_ids": [method["_payment_id"]], "available": True}
         else:
             method_cfg = mappings.get(ex_key, {}).get(mid, {})
 
