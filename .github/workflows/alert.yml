@@ -2,8 +2,8 @@ name: P2P Alert Bot COP
 
 on:
   schedule:
-    - cron: '*/10 * * * *'  # cada 10 minutos
-  workflow_dispatch:          # también permite ejecutarlo manualmente desde GitHub
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
 
 jobs:
   alert:
@@ -30,4 +30,4 @@ jobs:
           SOLO_COP:      "true"
           ASSET:         "USDT"
           TOP_N:         "20"
-        run: python alert_bot.py
+        run: python "P2P-Radar-Anuncios-main/P2P-Radar-Anuncios-main/alert_bot.py"
