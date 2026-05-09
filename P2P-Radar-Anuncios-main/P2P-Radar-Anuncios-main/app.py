@@ -585,6 +585,95 @@ def main() -> None:
 
     # ── TAB: TELEGRAM ─────────────────────────────────────────────────────────
     with tab_tg:
+        _section("🤖", "Alertas automáticas por Telegram")
+
+        with st.expander("⚙️ Configurar CallMeBot para Telegram", expanded=True):
+            st.markdown(
+                "**Pasos para activar (solo una vez):**\n"
+                "1. Abrí Telegram y buscá **@CallMeBot_txtbot**\n"
+                "2. Presioná **START** o escribile `/start`\n"
+                "3. Listo — ya podés recibir mensajes\n\n"
+                "🔗 [Abrir @CallMeBot_txtbot en Telegram](https://t.me/CallMeBot_txtbot)"
+            )
+            tg_username = st.text_input(
+                "👤 Tu username de Telegram (sin @)",
+                placeholder="Sebastian_Clavijo",
+                key="tg_token"
+            )
+            tg_umbral  = st.slider("📊 Umbral mínimo para alertar (% ganancia neta)", 0.1, 5.0, 0.5, 0.1, key="tg_umbral",
+                                   help="Solo se envían alertas cuando la brecha supera este porcentaje.")
+            tg_solo_cop = st.checkbox("🇨🇴 Solo alertar métodos COP", value=True, key="tg_solo_cop")
+            tg_chat_id  = ""  # no se usa en esta API
+
+        def _build_tg_message(r: SpreadResult) -> str:
+            buy  = r.ref_buy_ad
+            sell = r.ref_sell_ad
+            def pays(ad):
+                if not ad or not ad.payment_methods: return "—"
+                return ", ".join([m for m in ad.payment_methods if m][:5])
+            pct = r.net_profit_pct or 0
+            return (
+                f"🤖 *Alerta P2P Radar*\n"
+                f"💰 Ganancia neta: *{pct:.2f}%*\n"
+                f"💱 Método: {r.method_human} ({r.fiat})\n\n"
+                f"*COMPRÁ aquí (tab Comprar):*\n"
+                f"🏷️ {buy.advertiser_name if buy else '—'}\n"
+                f"💵 Precio: {_fmt(r.buy_price_effective, r.fiat)} / {r.asset}\n"
+                f"🔴 Límite: {f'{buy.min_amount:,.0f}' if buy else '—'} – {f'{buy.max_amount:,.0f}' if buy else '—'} {r.fiat}\n"
+                f"🟰 Métodos: {pays(buy)}\n\n"
+                f"*VENDÉ aquí (tab Vender):*\n"
+                f"🏷️ {sell.advertiser_name if sell else '—'}\n"
+                f"💵 Precio: {_fmt(r.sell_price_effective, r.fiat)} / {r.asset}\n"
+                f"🔴 Límite: {f'{sell.min_amount:,.0f}' if sell else '—'} – {f'{sell.max_amount:,.0f}' if sell else '—'} {r.fiat}\n"
+                f"🟰 Métodos: {pays(sell)}"
+            )
+
+        def _send_telegram(username: str, _unused: str, text: str) -> bool:
+            import urllib.request, urllib.parse
+            params = urllib.parse.urlencode({"user": f"@{username}", "text": text})
+            url = f"https://api.callmebot.com/text.php?{params}"
+            try:
+                req  = urllib.request.Request(url, method="GET")
+                resp = urllib.request.urlopen(req, timeout=10)
+                body = resp.read().decode("utf-8", errors="ignore")
+                return resp.status == 200 and "error" not in body.lower()
+            except Exception as e:
+                st.error(f"Error enviando a Telegram: {e}")
+                return False
+
+        # Filtrar resultados para alertas
+        alert_results = [
+            r for r in ok_results
+            if (r.net_profit_pct or 0) >= tg_umbral
+            and (not tg_solo_cop or r.fiat == "COP")
+        ]
+
+        col_send, col_test = st.columns(2)
+
+        if col_test.button("🧪 Enviar mensaje de prueba", disabled=not tg_token):
+            if _send_telegram(tg_token, "", "✅ P2P Radar conectado correctamente! Las alertas COP están activas."):
+                st.success("✅ Mensaje de prueba enviado. Revisá tu Telegram.")
+            else:
+                st.error("❌ No se pudo enviar. Asegurate de haber iniciado @CallMeBot_txtbot en Telegram.")
+
+        if col_send.button(
+            f"📤 Enviar alertas ahora ({len(alert_results)} oportunidades)",
+            disabled=not tg_token,
+            type="primary"
+        ):
+            if not alert_results:
+                st.warning(f"No hay oportunidades con ganancia ≥ {tg_umbral}% en este momento.")
+            else:
+                sent = 0
+                for r in alert_results:
+                    if _send_telegram(tg_token, "", _build_tg_message(r)):
+                        sent += 1
+                st.success(f"✅ {sent}/{len(alert_results)} alertas enviadas a Telegram.")
+
+        if not tg_token:
+            st.info("👆 Ingresá tu username de Telegram para activar el envío.")
+
+        st.divider()
         _section("📱", "Vista previa — formato Telegram")
         st.caption("Así se ve el mensaje en tu bot de Telegram.")
         tg_html = build_telegram_html(results)
