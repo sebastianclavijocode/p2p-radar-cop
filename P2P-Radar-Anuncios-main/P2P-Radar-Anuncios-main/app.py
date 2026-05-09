@@ -680,8 +680,32 @@ def main() -> None:
 
             if restante <= 0:
                 st.session_state["auto_alert_last"] = ahora
+                # ── Traer datos frescos del mercado ──────────────────────────
+                try:
+                    fresh_res = run_queries(
+                        exchange_name=exchange_name, asset=asset,
+                        mappings=st.session_state["mappings"],
+                        is_verified=is_verified,
+                        publication_mode=pub_mode,
+                        epsilon_fiat=eps_fiat, epsilon_pct=eps_pct,
+                        fee_slippage_pct=fee_slippage_pct,
+                        exclude_ads=excl_ads, ad_threshold_pct=ad_thresh,
+                        capital_cfg=caps, buffer_pct=buf_pct,
+                        min_net_profit_pct=min_net, allow_outside_target=allow_out,
+                        top_n=top_n,
+                        extra_methods=st.session_state.get("custom_methods", []),
+                        merchant_check=merchant_check,
+                    )
+                    # Actualizar también los resultados principales de la app
+                    st.session_state["results"]     = fresh_res
+                    st.session_state["last_update"] = _dt.now()
+                    fresh_ok = [r for r in fresh_res if r.status == "OK"]
+                except Exception as e:
+                    fresh_ok = ok_results  # fallback a datos anteriores si falla
+                    st.session_state["auto_alert_log"].insert(0, f"⚠️ {_dt.now().strftime('%H:%M:%S')} — Error actualizando: {e}")
+
                 candidatos = [
-                    r for r in ok_results
+                    r for r in fresh_ok
                     if (r.net_profit_pct or 0) >= tg_umbral
                     and (not tg_solo_cop or r.fiat == "COP")
                 ]
