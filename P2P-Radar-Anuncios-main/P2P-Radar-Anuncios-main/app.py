@@ -603,6 +603,13 @@ def main() -> None:
             tg_umbral  = st.slider("📊 Umbral mínimo para alertar (% ganancia neta)", 0.1, 5.0, 0.5, 0.1, key="tg_umbral",
                                    help="Solo se envían alertas cuando la brecha supera este porcentaje.")
             tg_solo_cop = st.checkbox("🇨🇴 Solo alertar métodos COP", value=True, key="tg_solo_cop")
+            tg_intervalo = st.selectbox(
+                "⏱️ Revisar automáticamente cada",
+                [1, 2, 5, 10, 15, 30],
+                index=2,
+                key="tg_intervalo",
+                format_func=lambda x: f"{x} minutos",
+            )
             tg_chat_id  = ""  # no se usa en esta API
 
         def _build_tg_message(r: SpreadResult) -> str:
@@ -613,15 +620,15 @@ def main() -> None:
                 return ", ".join([m for m in ad.payment_methods if m][:5])
             pct = r.net_profit_pct or 0
             return (
-                f"🤖 *Alerta P2P Radar*\n"
-                f"💰 Ganancia neta: *{pct:.2f}%*\n"
+                f"🤖 Alerta P2P Radar\n"
+                f"💰 Ganancia neta: {pct:.2f}%\n"
                 f"💱 Método: {r.method_human} ({r.fiat})\n\n"
-                f"*COMPRÁ aquí (tab Comprar):*\n"
+                f"COMPRA (tab Comprar):\n"
                 f"🏷️ {buy.advertiser_name if buy else '—'}\n"
                 f"💵 Precio: {_fmt(r.buy_price_effective, r.fiat)} / {r.asset}\n"
                 f"🔴 Límite: {f'{buy.min_amount:,.0f}' if buy else '—'} – {f'{buy.max_amount:,.0f}' if buy else '—'} {r.fiat}\n"
                 f"🟰 Métodos: {pays(buy)}\n\n"
-                f"*VENDÉ aquí (tab Vender):*\n"
+                f"VENTA (tab Vender):\n"
                 f"🏷️ {sell.advertiser_name if sell else '—'}\n"
                 f"💵 Precio: {_fmt(r.sell_price_effective, r.fiat)} / {r.asset}\n"
                 f"🔴 Límite: {f'{sell.min_amount:,.0f}' if sell else '—'} – {f'{sell.max_amount:,.0f}' if sell else '—'} {r.fiat}\n"
@@ -641,17 +648,79 @@ def main() -> None:
                 st.error(f"Error enviando a Telegram: {e}")
                 return False
 
-        # Filtrar resultados para alertas
+        # ── INICIALIZAR ESTADO AUTO-ALERTA ────────────────────────────────────
+        import time as _time
+        from datetime import datetime as _dt
+        for _k, _v in [("auto_alert_on", False), ("auto_alert_last", 0.0), ("auto_alert_log", []), ("auto_alert_sent_ids", set())]:
+            if _k not in st.session_state:
+                st.session_state[_k] = _v
+
+        # ── BOTÓN ACTIVAR / DETENER ───────────────────────────────────────────
+        st.divider()
+        _section("🤖", "Auto-alertas")
+        col_on, col_status = st.columns([1, 2])
+        if col_on.button(
+            "🟢 Activar" if not st.session_state["auto_alert_on"] else "🔴 Detener",
+            disabled=not tg_token,
+            type="primary" if not st.session_state["auto_alert_on"] else "secondary",
+            key="btn_auto"
+        ):
+            st.session_state["auto_alert_on"]       = not st.session_state["auto_alert_on"]
+            st.session_state["auto_alert_last"]      = 0.0
+            st.session_state["auto_alert_log"]       = []
+            st.session_state["auto_alert_sent_ids"]  = set()
+            st.rerun()
+
+        # ── LÓGICA AUTO ───────────────────────────────────────────────────────
+        if st.session_state["auto_alert_on"] and tg_token:
+            ahora       = _time.time()
+            intervalo_s = tg_intervalo * 60
+            restante    = intervalo_s - (ahora - st.session_state["auto_alert_last"])
+
+            if restante <= 0:
+                st.session_state["auto_alert_last"] = ahora
+                candidatos = [
+                    r for r in ok_results
+                    if (r.net_profit_pct or 0) >= tg_umbral
+                    and (not tg_solo_cop or r.fiat == "COP")
+                ]
+                nuevos = [r for r in candidatos if r.method_id not in st.session_state["auto_alert_sent_ids"]]
+                if nuevos:
+                    enviados = sum(1 for r in nuevos if _send_telegram(tg_token, "", _build_tg_message(r)))
+                    for r in nuevos:
+                        st.session_state["auto_alert_sent_ids"].add(r.method_id)
+                    log = f"✅ {_dt.now().strftime('%H:%M:%S')} — {enviados} alerta(s) enviada(s)"
+                else:
+                    st.session_state["auto_alert_sent_ids"] = set()
+                    log = f"⏳ {_dt.now().strftime('%H:%M:%S')} — Sin oportunidades ≥ {tg_umbral}%"
+                st.session_state["auto_alert_log"] = ([log] + st.session_state["auto_alert_log"])[:10]
+                _time.sleep(intervalo_s)
+                st.rerun()
+            else:
+                mins, segs = int(restante // 60), int(restante % 60)
+                col_status.info(f"🟢 Activo — próxima revisión en **{mins}:{segs:02d}**")
+                _time.sleep(10)
+                st.rerun()
+        elif not st.session_state["auto_alert_on"]:
+            col_status.caption("⚫ Auto-alertas desactivadas")
+
+        if st.session_state["auto_alert_log"]:
+            with st.expander("📋 Actividad reciente", expanded=True):
+                for entry in st.session_state["auto_alert_log"]:
+                    st.caption(entry)
+
+        # ── ENVÍO MANUAL ──────────────────────────────────────────────────────
+        st.divider()
+        _section("📤", "Envío manual")
         alert_results = [
             r for r in ok_results
             if (r.net_profit_pct or 0) >= tg_umbral
             and (not tg_solo_cop or r.fiat == "COP")
         ]
-
         col_send, col_test = st.columns(2)
 
         if col_test.button("🧪 Enviar mensaje de prueba", disabled=not tg_token):
-            if _send_telegram(tg_token, "", "✅ P2P Radar conectado correctamente! Las alertas COP están activas."):
+            if _send_telegram(tg_token, "", "✅ P2P Radar conectado! Las alertas COP están activas."):
                 st.success("✅ Mensaje de prueba enviado. Revisá tu Telegram.")
             else:
                 st.error("❌ No se pudo enviar. Asegurate de haber iniciado @CallMeBot_txtbot en Telegram.")
