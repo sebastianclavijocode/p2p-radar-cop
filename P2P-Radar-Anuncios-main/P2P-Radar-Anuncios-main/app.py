@@ -595,7 +595,7 @@ def main() -> None:
                 "3. Listo — ya podés recibir mensajes\n\n"
                 "🔗 [Abrir @CallMeBot_txtbot en Telegram](https://t.me/CallMeBot_txtbot)"
             )
-            tg_username = st.text_input(
+            tg_token = st.text_input(
                 "👤 Tu username de Telegram (sin @)",
                 placeholder="Sebastian_Clavijo",
                 key="tg_token"
