@@ -1,0 +1,33 @@
+name: P2P Alert Bot COP
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'  # cada 10 minutos
+  workflow_dispatch:          # también permite ejecutarlo manualmente desde GitHub
+
+jobs:
+  alert:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        run: pip install requests
+
+      - name: Ejecutar bot de alertas
+        env:
+          TG_USERNAME:   ${{ secrets.TG_USERNAME }}
+          UMBRAL_PCT:    ${{ secrets.UMBRAL_PCT }}
+          MAKER_FEE_COP: ${{ secrets.MAKER_FEE_COP }}
+          SOLO_COP:      "true"
+          ASSET:         "USDT"
+          TOP_N:         "20"
+        run: python alert_bot.py
