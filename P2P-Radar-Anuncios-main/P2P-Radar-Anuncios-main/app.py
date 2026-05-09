@@ -409,27 +409,37 @@ def main() -> None:
 
         st.divider()
         if exchange_name == "Binance":
-            rows_html = "".join(
-                f'<div style="display:flex;justify-content:space-between;align-items:center;'
-                f'padding:9px 14px;border-bottom:1px solid rgba(255,255,255,0.05);">'
-                f'<span style="font-size:12px;font-weight:700;color:rgba(255,255,255,0.65);'
-                f'text-transform:uppercase;letter-spacing:0.8px;">{fk}</span>'
-                f'<span style="font-size:13px;font-weight:800;color:#00d68f;">'
-                f'{(fv["verified"] if is_verified else fv["non_verified"]):.2f}%</span></div>'
-                for fk, fv in BINANCE_MAKER_FEES.items()
-            )
             st.markdown(
-                f'<div style="background:rgba(255,255,255,0.025);border:1px solid rgba(0,214,143,0.22);'
-                f'border-left:3px solid #00d68f;border-radius:10px;overflow:hidden;margin-top:4px;">'
-                f'<div style="padding:10px 14px 8px;border-bottom:1px solid rgba(255,255,255,0.06);">'
-                f'<div style="font-size:12px;text-transform:uppercase;letter-spacing:1px;'
-                f'color:rgba(255,255,255,0.75);font-weight:700;">Comisión maker por divisa</div>'
-                f'<div style="font-size:10px;color:rgba(255,255,255,0.25);margin-top:3px;line-height:1.4;">'
-                f'Se descuenta del net profit según la divisa.</div>'
-                f'</div>'
-                f'{rows_html}</div>',
+                '<div style="font-size:12px;text-transform:uppercase;letter-spacing:1px;'
+                'color:rgba(255,255,255,0.75);font-weight:700;margin-bottom:6px;">'
+                'Comisión maker por divisa</div>'
+                '<div style="font-size:10px;color:rgba(255,255,255,0.35);margin-bottom:10px;">'
+                'Editá los valores según tu nivel en Binance.</div>',
                 unsafe_allow_html=True,
             )
+            # Inicializar fees editables en session_state
+            if "maker_fees" not in st.session_state:
+                st.session_state["maker_fees"] = {
+                    fk: (fv["verified"] if is_verified else fv["non_verified"])
+                    for fk, fv in BINANCE_MAKER_FEES.items()
+                }
+            for fk in BINANCE_MAKER_FEES:
+                col_fiat, col_val = st.columns([1, 1])
+                col_fiat.markdown(
+                    f'<div style="font-size:12px;font-weight:700;color:rgba(255,255,255,0.65);'
+                    f'text-transform:uppercase;letter-spacing:0.8px;padding-top:8px;">{fk}</div>',
+                    unsafe_allow_html=True
+                )
+                new_val = col_val.number_input(
+                    f"fee_{fk}", min_value=0.0, max_value=5.0,
+                    value=float(st.session_state["maker_fees"].get(fk, BINANCE_MAKER_FEES[fk]["verified"])),
+                    step=0.01, format="%.2f",
+                    label_visibility="collapsed", key=f"fee_input_{fk}"
+                )
+                st.session_state["maker_fees"][fk] = new_val
+                # Actualizar el dict global para que lo usen los cálculos
+                BINANCE_MAKER_FEES[fk]["verified"]     = new_val
+                BINANCE_MAKER_FEES[fk]["non_verified"] = new_val
         else:
             st.caption("Sin comisión (0%)")
 
