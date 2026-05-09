@@ -600,7 +600,8 @@ def main() -> None:
                 placeholder="Sebastian_Clavijo",
                 key="tg_token"
             )
-            tg_umbral  = st.slider("📊 Umbral mínimo para alertar (% ganancia neta)", 0.1, 5.0, 0.5, 0.1, key="tg_umbral",
+            tg_umbral  = st.slider("📊 Umbral mínimo para alertar (% ganancia neta)", 0.10, 5.0, 0.50, 0.05, key="tg_umbral",
+                                   format="%.2f%%",
                                    help="Solo se envían alertas cuando la brecha supera este porcentaje.")
             tg_solo_cop = st.checkbox("🇨🇴 Solo alertar métodos COP", value=True, key="tg_solo_cop")
             tg_intervalo = st.selectbox(
