@@ -687,7 +687,7 @@ def main() -> None:
         # ── LÓGICA AUTO ───────────────────────────────────────────────────────
         if st.session_state["auto_alert_on"] and tg_token:
             ahora       = _time.time()
-            intervalo_s = tg_intervalo * 60
+            intervalo_s = tg_intervalo * 64
             restante    = intervalo_s - (ahora - st.session_state["auto_alert_last"])
 
             if restante <= 0:
