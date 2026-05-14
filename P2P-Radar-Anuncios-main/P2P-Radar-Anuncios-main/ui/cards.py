@@ -594,13 +594,26 @@ def build_taker_cards_html(taker_opportunities: list) -> str:
   <div style="display:flex;justify-content:space-between;align-items:center;
               border-top:1px solid rgba(255,140,0,0.15);padding-top:10px;font-size:10px;">
     <span style="color:rgba(255,255,255,0.4);">
-      Capital ~{t['cantidad_usdt']:.1f} USDT
+      Capital ~{t['cantidad_usdt']:.1f} USDT ({t['capital']:,.0f} {t['fiat']})
     </span>
     <span style="color:#ff8c00;font-weight:700;">
       Ganancia ≈ {t['ganancia_cop']:,.0f} {t['fiat']}
     </span>
     <span style="color:rgba(255,255,255,0.3);">
       Comisión fija: $0.14 USDT
+    </span>
+  </div>
+
+  <!-- Compatibilidad de límites -->
+  <div style="margin-top:8px;padding:8px 10px;border-radius:8px;
+    background:{'rgba(0,214,143,0.08)' if t.get('dentro_limites') else 'rgba(255,68,68,0.08)'};
+    border:1px solid {'rgba(0,214,143,0.25)' if t.get('dentro_limites') else 'rgba(255,68,68,0.25)'};
+    font-size:10px;display:flex;justify-content:space-between;align-items:center;">
+    <span style="color:{'#00d68f' if t.get('dentro_limites') else '#ff4444'};font-weight:700;">
+      {'✅ Capital dentro de límites — podés operar' if t.get('dentro_limites') else '⚠️ Capital fuera de límites de algún anuncio'}
+    </span>
+    <span style="color:rgba(255,255,255,0.35);">
+      Compra: {t['buy_min']:,.0f}–{t['buy_max']:,.0f} · Venta: {t['sell_min']:,.0f}–{t['sell_max']:,.0f} {t['fiat']}
     </span>
   </div>
 </div>
