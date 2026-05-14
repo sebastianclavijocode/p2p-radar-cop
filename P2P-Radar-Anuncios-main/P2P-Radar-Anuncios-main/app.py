@@ -21,7 +21,7 @@ from core.mapping import DEFAULT_MAPPINGS, load_mappings, save_mappings
 from core.models import METHODS_CATALOG, SpreadResult
 from core.scanner import scan_all_methods
 from core.spread import analyze_opportunity
-from ui.cards import build_alerts_html, build_dashboard_html, build_feed_html, build_hero_html, build_kpi_html, build_telegram_html
+from ui.cards import build_alerts_html, build_dashboard_html, build_feed_html, build_hero_html, build_kpi_html, build_telegram_html, build_taker_cards_html
 from ui.styles import GLASS_CSS
 from ui.table import render_chart, render_discarded_table, render_ok_table
 
@@ -498,7 +498,43 @@ def main() -> None:
     if ok_results:
         render_chart(results)
 
-    # ── 3. ALERTAS ────────────────────────────────────────────────────────────
+    # ── 3. TAKER-TAKER (tarjetas naranjas) ───────────────────────────────────
+    TAKER_FEE_USDT = 0.14  # $0.07 compra + $0.07 venta
+    capital_cop_sim = caps.get("COP", {}).get("simulado", 2_000_000)
+    taker_ops = []
+    for r in results:
+        if r.fiat != "COP": continue
+        if not r.ref_buy_ad or not r.ref_sell_ad: continue
+        taker_buy  = r.ref_buy_ad.price
+        taker_sell = r.ref_sell_ad.price
+        if taker_sell <= taker_buy: continue
+        cantidad_usdt  = capital_cop_sim / taker_buy
+        ganancia_bruta = (taker_sell - taker_buy) * cantidad_usdt
+        ganancia_cop   = ganancia_bruta - (TAKER_FEE_USDT * taker_sell)
+        ganancia_pct   = (taker_sell - taker_buy) / taker_buy * 100
+        if ganancia_pct >= (min_net if min_net > 0 else 0.05):
+            taker_ops.append({
+                "method_human":  r.method_human,
+                "fiat":          r.fiat,
+                "asset":         r.asset,
+                "taker_buy":     taker_buy,
+                "taker_sell":    taker_sell,
+                "ganancia_cop":  ganancia_cop,
+                "ganancia_pct":  ganancia_pct,
+                "cantidad_usdt": cantidad_usdt,
+            })
+
+    if taker_ops:
+        st.markdown(
+            '<div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;'
+            'color:rgba(255,140,0,0.8);font-weight:700;margin-bottom:4px;margin-top:8px;">'
+            '🟠 Oportunidades Taker-Taker (sin anuncio)</div>',
+            unsafe_allow_html=True
+        )
+        taker_html = build_taker_cards_html(taker_ops)
+        components.html(taker_html, height=len(taker_ops) * 200 + 20, scrolling=False)
+
+    # ── 4. ALERTAS MAKER-MAKER ────────────────────────────────────────────────
     alerts_html = build_alerts_html(results)
     alerts_height = 80 + max(len(ok_results) * 280, 200)
     components.html(alerts_html, height=alerts_height, scrolling=True)
@@ -687,7 +723,7 @@ def main() -> None:
         # ── LÓGICA AUTO ───────────────────────────────────────────────────────
         if st.session_state["auto_alert_on"] and tg_token:
             ahora       = _time.time()
-            intervalo_s = tg_intervalo * 64
+            intervalo_s = tg_intervalo * 60
             restante    = intervalo_s - (ahora - st.session_state["auto_alert_last"])
 
             if restante <= 0:
