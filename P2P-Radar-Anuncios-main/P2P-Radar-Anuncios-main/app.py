@@ -558,7 +558,7 @@ def main() -> None:
         ganancia_bruta = (taker_sell - taker_buy) * cantidad_usdt
         ganancia_cop   = ganancia_bruta - (TAKER_FEE_USDT * taker_sell)
         ganancia_pct   = (taker_sell - taker_buy) / taker_buy * 100
-        if ganancia_pct >= (min_net if min_net > 0 else 0.05):
+        if ganancia_pct >= max(min_net, 0.0):  # respeta ganancia mínima configurada
             taker_ops.append({
                 "method_human":   r.method_human,
                 "fiat":           r.fiat,
@@ -578,13 +578,15 @@ def main() -> None:
 
     if taker_ops:
         st.markdown(
-            '<div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;'
-            'color:rgba(255,140,0,0.8);font-weight:700;margin-bottom:4px;margin-top:8px;">'
-            '🟠 Oportunidades Taker-Taker (sin anuncio)</div>',
+            f'<div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;'
+            f'color:rgba(255,140,0,0.8);font-weight:700;margin-bottom:4px;margin-top:8px;">'
+            f'🟠 Oportunidades Taker-Taker (sin anuncio) &nbsp;'
+            f'<span style="background:rgba(255,140,0,0.2);border-radius:10px;padding:2px 8px;">'
+            f'{len(taker_ops)}</span></div>',
             unsafe_allow_html=True
         )
         taker_html = build_taker_cards_html(taker_ops)
-        components.html(taker_html, height=len(taker_ops) * 220 + 20, scrolling=False)
+        components.html(taker_html, height=len(taker_ops) * 260 + 30, scrolling=False)
 
     # ── 4. ALERTAS MAKER-MAKER ────────────────────────────────────────────────
     alerts_html = build_alerts_html(results)
