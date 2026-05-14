@@ -1,0 +1,58 @@
+{
+  "bancolombia_cop_custom": {
+    "nombre": "Bancolombia",
+    "fiat": "COP",
+    "registros": [
+      {
+        "ts": "2026-05-14T23:49:18.880977+00:00",
+        "buy_price": 3742.69,
+        "sell_price": 3747.69,
+        "taker_buy": 3740.0,
+        "taker_sell": 3748.74,
+        "spread_pct": 0.1336
+      }
+    ]
+  },
+  "nequi_cop_custom": {
+    "nombre": "Nequi",
+    "fiat": "COP",
+    "registros": [
+      {
+        "ts": "2026-05-14T23:49:21.439940+00:00",
+        "buy_price": 3750.88,
+        "sell_price": 3746.14,
+        "taker_buy": 3750.0,
+        "taker_sell": 3748.76,
+        "spread_pct": -0.1263
+      }
+    ]
+  },
+  "daviplata_cop_custom": {
+    "nombre": "Daviplata",
+    "fiat": "COP",
+    "registros": [
+      {
+        "ts": "2026-05-14T23:49:23.950980+00:00",
+        "buy_price": 3757.85,
+        "sell_price": 3744.97,
+        "taker_buy": 3757.2,
+        "taker_sell": 3748.78,
+        "spread_pct": -0.3427
+      }
+    ]
+  },
+  "breb_cop_custom": {
+    "nombre": "Llaves Bre-B",
+    "fiat": "COP",
+    "registros": [
+      {
+        "ts": "2026-05-14T23:49:26.543910+00:00",
+        "buy_price": 3752.6,
+        "sell_price": 3747.26,
+        "taker_buy": 3751.59,
+        "taker_sell": 3748.78,
+        "spread_pct": -0.1423
+      }
+    ]
+  }
+}
