@@ -10,9 +10,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 4
 
+    permissions:
+      contents: write
+      actions: write
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT }}
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -32,11 +38,12 @@ jobs:
           TOP_N:         "20"
         run: python "P2P-Radar-Anuncios-main/P2P-Radar-Anuncios-main/alert_bot.py"
 
-      - name: Keep alive
+      - name: Keep alive via API
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          echo "$(date -u)" > .last_run
-          git add .last_run
-          git diff --staged --quiet || git commit -m "bot: keep alive $(date -u '+%Y-%m-%d %H:%M')"
-          git push
+          curl -s -X PUT \
+            -H "Authorization: token $GH_PAT" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/sebastianclavijocode/p2p-radar-cop/actions/workflows/alert.yml/enable"
+          echo "✅ Workflow re-habilitado via API"
