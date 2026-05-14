@@ -515,3 +515,100 @@ function copyAlert(btnId, text) {
             f'<body><div class="tg-wrap">'
             f'<div style="font-size:10px;color:rgba(255,255,255,.2);margin-bottom:16px;letter-spacing:.8px;text-transform:uppercase">Preview Telegram</div>'
             f'{bubbles}</div>{copy_js}</body></html>')
+
+
+# ── Taker-Taker card HTML ─────────────────────────────────────────────────────
+
+def build_taker_cards_html(taker_opportunities: list) -> str:
+    """
+    taker_opportunities: lista de dicts con:
+      {method_human, fiat, asset, taker_buy, taker_sell, ganancia_cop, ganancia_pct, cantidad_usdt}
+    """
+    if not taker_opportunities:
+        return ""
+
+    cards = []
+    for t in taker_opportunities:
+        pct   = t["ganancia_pct"]
+        pct_s = f"+{pct:.3f}%"
+        cards.append(f"""
+<div style="
+  background: linear-gradient(135deg, rgba(255,140,0,0.12), rgba(255,100,0,0.06));
+  border: 1px solid rgba(255,140,0,0.45);
+  border-left: 4px solid #ff8c00;
+  border-radius: 14px;
+  padding: 16px 20px;
+  margin-bottom: 14px;
+  position: relative;
+  overflow: hidden;
+">
+  <!-- Overlay sutil -->
+  <div style="
+    position:absolute;top:0;left:0;right:0;bottom:0;
+    background: repeating-linear-gradient(
+      45deg, transparent, transparent 8px,
+      rgba(255,140,0,0.03) 8px, rgba(255,140,0,0.03) 16px
+    );
+    pointer-events:none;
+  "></div>
+
+  <!-- Header -->
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;">
+    <div>
+      <div style="font-size:13px;font-weight:800;color:#fff;letter-spacing:0.3px;">
+        🟠 {t['method_human']}
+      </div>
+      <div style="font-size:10px;color:rgba(255,255,255,0.45);margin-top:2px;">
+        {t['fiat']} / {t['asset']} &nbsp;·&nbsp; TAKER-TAKER (sin anuncio)
+      </div>
+    </div>
+    <div style="text-align:right;">
+      <div style="font-size:22px;font-weight:900;color:#ff8c00;line-height:1;">{pct_s}</div>
+      <div style="font-size:9px;color:rgba(255,140,0,0.6);text-transform:uppercase;letter-spacing:0.8px;">ganancia neta</div>
+    </div>
+  </div>
+
+  <!-- Precios -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+    <div style="background:rgba(0,200,100,0.08);border:1px solid rgba(0,200,100,0.2);border-radius:8px;padding:10px 12px;">
+      <div style="font-size:9px;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:4px;">
+        📗 Comprás directamente
+      </div>
+      <div style="font-size:18px;font-weight:800;color:#00d68f;">
+        {t['taker_buy']:,.2f} <span style="font-size:11px;font-weight:500;color:rgba(255,255,255,0.5);">{t['fiat']}</span>
+      </div>
+      <div style="font-size:9px;color:rgba(255,255,255,0.3);margin-top:2px;">tab Comprar · como taker</div>
+    </div>
+    <div style="background:rgba(255,80,80,0.08);border:1px solid rgba(255,80,80,0.2);border-radius:8px;padding:10px 12px;">
+      <div style="font-size:9px;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:4px;">
+        📕 Vendés directamente
+      </div>
+      <div style="font-size:18px;font-weight:800;color:#ff6b6b;">
+        {t['taker_sell']:,.2f} <span style="font-size:11px;font-weight:500;color:rgba(255,255,255,0.5);">{t['fiat']}</span>
+      </div>
+      <div style="font-size:9px;color:rgba(255,255,255,0.3);margin-top:2px;">tab Vender · como taker</div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div style="display:flex;justify-content:space-between;align-items:center;
+              border-top:1px solid rgba(255,140,0,0.15);padding-top:10px;font-size:10px;">
+    <span style="color:rgba(255,255,255,0.4);">
+      Capital ~{t['cantidad_usdt']:.1f} USDT
+    </span>
+    <span style="color:#ff8c00;font-weight:700;">
+      Ganancia ≈ {t['ganancia_cop']:,.0f} {t['fiat']}
+    </span>
+    <span style="color:rgba(255,255,255,0.3);">
+      Comisión fija: $0.14 USDT
+    </span>
+  </div>
+</div>
+""")
+
+    body = "\n".join(cards)
+    return (
+        f'<!DOCTYPE html><html><head><meta charset="utf-8">'
+        f'<style>body{{margin:0;padding:4px 2px 8px;background:transparent;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}}</style>'
+        f'</head><body>{body}</body></html>'
+    )
