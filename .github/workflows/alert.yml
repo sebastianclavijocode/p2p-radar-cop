@@ -33,9 +33,7 @@ jobs:
           TG_USERNAME:   ${{ secrets.TG_USERNAME }}
           UMBRAL_PCT:    ${{ secrets.UMBRAL_PCT }}
           MAKER_FEE_COP: ${{ secrets.MAKER_FEE_COP }}
-          SOLO_COP:      "true"
-          ASSET:         "USDT"
-          TOP_N:         "20"
+          GH_PAT:        ${{ secrets.GH_PAT }}
         run: python "P2P-Radar-Anuncios-main/P2P-Radar-Anuncios-main/alert_bot.py"
 
       - name: Keep alive via API
@@ -46,4 +44,4 @@ jobs:
             -H "Authorization: token $GH_PAT" \
             -H "Accept: application/vnd.github.v3+json" \
             "https://api.github.com/repos/sebastianclavijocode/p2p-radar-cop/actions/workflows/alert.yml/enable"
-          echo "✅ Workflow re-habilitado via API"
+          echo "✅ Workflow re-habilitado"
