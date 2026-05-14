@@ -227,6 +227,46 @@ def _capital_panel() -> Dict:
                 "target_max": simulado,
                 "simulado":   simulado,
             }
+
+    # ── Capital Taker-Taker COP ───────────────────────────────────────────────
+    with st.expander("💱 Capital Taker-Taker (COP)", expanded=False):
+        st.caption(
+            "Capital específico para operaciones sin anuncio (compra y venta directa). "
+            "También definí los límites mínimo y máximo para filtrar anuncios compatibles."
+        )
+        taker_cfg = st.session_state.get("taker_cfg", {
+            "capital":  2_000_000,
+            "lim_min":  800_000,
+            "lim_max":  10_000_000,
+        })
+        t_cap = st.number_input(
+            "Capital a usar (COP)",
+            min_value=0.0,
+            value=float(taker_cfg["capital"]),
+            step=100_000.0,
+            key="taker_capital",
+            help="Cuántos COP querés usar en cada operación taker-taker.",
+        )
+        col_min, col_max = st.columns(2)
+        t_min = col_min.number_input(
+            "Límite mínimo (COP)",
+            min_value=0.0,
+            value=float(taker_cfg["lim_min"]),
+            step=100_000.0,
+            key="taker_lim_min",
+            help="El anuncio debe aceptar al menos este monto.",
+        )
+        t_max = col_max.number_input(
+            "Límite máximo (COP)",
+            min_value=0.0,
+            value=float(taker_cfg["lim_max"]),
+            step=500_000.0,
+            key="taker_lim_max",
+            help="El anuncio debe aceptar hasta este monto.",
+        )
+        taker_cfg = {"capital": t_cap, "lim_min": t_min, "lim_max": t_max}
+        st.session_state["taker_cfg"] = taker_cfg
+
     st.session_state["capital_cfg"] = caps
     return caps
 
@@ -499,8 +539,11 @@ def main() -> None:
         render_chart(results)
 
     # ── 3. TAKER-TAKER (tarjetas naranjas) ───────────────────────────────────
-    TAKER_FEE_USDT = 0.14  # $0.07 compra + $0.07 venta
-    capital_cop_sim = caps.get("COP", {}).get("simulado", 2_000_000)
+    TAKER_FEE_USDT    = 0.14
+    taker_cfg         = st.session_state.get("taker_cfg", {"capital": 2_000_000, "lim_min": 800_000, "lim_max": 10_000_000})
+    capital_cop_taker = taker_cfg["capital"]
+    taker_lim_min     = taker_cfg["lim_min"]
+    taker_lim_max     = taker_cfg["lim_max"]
     taker_ops = []
     for r in results:
         if r.fiat != "COP": continue
@@ -508,20 +551,29 @@ def main() -> None:
         taker_buy  = r.ref_buy_ad.price
         taker_sell = r.ref_sell_ad.price
         if taker_sell <= taker_buy: continue
-        cantidad_usdt  = capital_cop_sim / taker_buy
+        # Verificar que el capital entra en los límites de ambos anuncios
+        buy_ok  = r.ref_buy_ad.min_amount  <= capital_cop_taker <= r.ref_buy_ad.max_amount
+        sell_ok = r.ref_sell_ad.min_amount <= capital_cop_taker <= r.ref_sell_ad.max_amount
+        cantidad_usdt  = capital_cop_taker / taker_buy
         ganancia_bruta = (taker_sell - taker_buy) * cantidad_usdt
         ganancia_cop   = ganancia_bruta - (TAKER_FEE_USDT * taker_sell)
         ganancia_pct   = (taker_sell - taker_buy) / taker_buy * 100
         if ganancia_pct >= (min_net if min_net > 0 else 0.05):
             taker_ops.append({
-                "method_human":  r.method_human,
-                "fiat":          r.fiat,
-                "asset":         r.asset,
-                "taker_buy":     taker_buy,
-                "taker_sell":    taker_sell,
-                "ganancia_cop":  ganancia_cop,
-                "ganancia_pct":  ganancia_pct,
-                "cantidad_usdt": cantidad_usdt,
+                "method_human":   r.method_human,
+                "fiat":           r.fiat,
+                "asset":          r.asset,
+                "taker_buy":      taker_buy,
+                "taker_sell":     taker_sell,
+                "ganancia_cop":   ganancia_cop,
+                "ganancia_pct":   ganancia_pct,
+                "cantidad_usdt":  cantidad_usdt,
+                "dentro_limites": buy_ok and sell_ok,
+                "buy_min":        r.ref_buy_ad.min_amount,
+                "buy_max":        r.ref_buy_ad.max_amount,
+                "sell_min":       r.ref_sell_ad.min_amount,
+                "sell_max":       r.ref_sell_ad.max_amount,
+                "capital":        capital_cop_taker,
             })
 
     if taker_ops:
@@ -532,7 +584,7 @@ def main() -> None:
             unsafe_allow_html=True
         )
         taker_html = build_taker_cards_html(taker_ops)
-        components.html(taker_html, height=len(taker_ops) * 200 + 20, scrolling=False)
+        components.html(taker_html, height=len(taker_ops) * 220 + 20, scrolling=False)
 
     # ── 4. ALERTAS MAKER-MAKER ────────────────────────────────────────────────
     alerts_html = build_alerts_html(results)
