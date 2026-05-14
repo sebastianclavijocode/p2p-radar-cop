@@ -541,9 +541,10 @@ def main() -> None:
 
     # ── VISTAS SECUNDARIAS (tabs debajo del dashboard) ────────────────────────
     st.markdown("<div style='margin-top:20px'></div>", unsafe_allow_html=True)
-    tab_scan, tab_tg, tab_table, tab_disc, tab_diag = st.tabs([
+    tab_scan, tab_tg, tab_hold, tab_table, tab_disc, tab_diag = st.tabs([
         "🔁 Escaneo",
         "📱 Telegram",
+        "🔵 Hold",
         "📊 Tabla",
         f"🗑️ Descartadas ({disc_count})",
         "🔬 Diagnóstico",
@@ -853,6 +854,161 @@ def main() -> None:
                     )
                     st.code(txt, language="")
                     st.divider()
+
+    # ── TAB: HOLD 🔵 ──────────────────────────────────────────────────────────
+    with tab_hold:
+        _section("🔵", "Estrategia Hold — Comprar ahora, vender después")
+        st.caption(
+            "Analizá si el precio actual está por debajo del promedio histórico. "
+            "Si es así, puede ser buen momento para comprar USDT ahora y vender cuando suba. "
+            "El historial se acumula cada 10 minutos automáticamente."
+        )
+
+        # Cargar historial desde GitHub
+        import requests as _req, base64 as _b64
+        GH_REPO_HOLD    = "sebastianclavijocode/p2p-radar-cop"
+        HISTORY_PATH_HOLD = "P2P-Radar-Anuncios-main/P2P-Radar-Anuncios-main/price_history.json"
+        GH_PAT_HOLD     = st.secrets.get("GH_PAT", "") if hasattr(st, "secrets") else ""
+
+        @st.cache_data(ttl=600)
+        def _load_price_history():
+            url = f"https://api.github.com/repos/{GH_REPO_HOLD}/contents/{HISTORY_PATH_HOLD}"
+            headers = {"Accept": "application/vnd.github.v3+json"}
+            try:
+                r = _req.get(url, headers=headers, timeout=15)
+                if r.status_code == 200:
+                    content = _b64.b64decode(r.json()["content"]).decode("utf-8")
+                    return json.loads(content)
+            except Exception as e:
+                pass
+            return {}
+
+        history_data = _load_price_history()
+
+        if not history_data:
+            st.info("⏳ Todavía no hay historial acumulado. El bot guarda precios cada 10 minutos — volvé en unas horas para ver el análisis.")
+        else:
+            import statistics as _stats
+
+            MAKER_FEE_HOLD = BINANCE_MAKER_FEES.get("COP", {}).get("verified" if is_verified else "non_verified", 0.25)
+            TAKER_FEE_HOLD = 0.14  # USD fijo
+
+            for method_id, data in history_data.items():
+                registros = data.get("registros", [])
+                nombre    = data.get("nombre", method_id)
+                fiat      = data.get("fiat", "COP")
+
+                if len(registros) < 2:
+                    continue
+
+                # Extraer series de precios
+                buy_prices  = [r["taker_buy"]  for r in registros if "taker_buy"  in r]
+                sell_prices = [r["taker_sell"] for r in registros if "taker_sell" in r]
+
+                if not buy_prices or not sell_prices:
+                    buy_prices  = [r["buy_price"]  for r in registros]
+                    sell_prices = [r["sell_price"] for r in registros]
+
+                if not buy_prices: continue
+
+                precio_actual   = buy_prices[-1]
+                promedio        = _stats.mean(buy_prices)
+                minimo          = min(buy_prices)
+                maximo          = max(buy_prices)
+                desv            = _stats.stdev(buy_prices) if len(buy_prices) > 1 else 0
+                pct_vs_promedio = (precio_actual - promedio) / promedio * 100
+                n_registros     = len(registros)
+                horas           = round(n_registros * 10 / 60, 1)
+
+                # Señal de compra
+                if pct_vs_promedio <= -0.3:
+                    señal = "🟢 BUEN MOMENTO — precio bajo vs histórico"
+                    señal_color = "#00d68f"
+                elif pct_vs_promedio <= 0:
+                    señal = "🟡 NEUTRAL — precio levemente bajo"
+                    señal_color = "#ffd700"
+                elif pct_vs_promedio <= 0.3:
+                    señal = "🟠 PRECAUCIÓN — precio levemente alto"
+                    señal_color = "#ff8c00"
+                else:
+                    señal = "🔴 PRECIO ALTO — esperar mejor momento"
+                    señal_color = "#ff4444"
+
+                # Ganancia estimada si vendés al promedio de venta
+                promedio_venta  = _stats.mean(sell_prices) if sell_prices else precio_actual
+                capital_usdt    = caps.get(fiat, {}).get("simulado", 2_000_000) / precio_actual
+                ganancia_hold   = (promedio_venta - precio_actual) * capital_usdt - TAKER_FEE_HOLD * promedio_venta
+                ganancia_hold_pct = (promedio_venta - precio_actual) / precio_actual * 100 - (MAKER_FEE_HOLD)
+
+                st.markdown(f"""
+<div style="
+  background: linear-gradient(135deg, rgba(41,182,246,0.08), rgba(0,100,200,0.04));
+  border: 1px solid rgba(41,182,246,0.3);
+  border-left: 4px solid #29b6f6;
+  border-radius: 14px;
+  padding: 18px 20px;
+  margin-bottom: 16px;
+">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;">
+    <div>
+      <div style="font-size:14px;font-weight:800;color:#fff;">🔵 {nombre}</div>
+      <div style="font-size:10px;color:rgba(255,255,255,0.4);margin-top:2px;">
+        {fiat} · {n_registros} registros · últimas {horas}h
+      </div>
+    </div>
+    <div style="text-align:right;">
+      <div style="font-size:12px;font-weight:700;color:{señal_color};">{señal}</div>
+      <div style="font-size:11px;color:rgba(255,255,255,0.4);margin-top:2px;">
+        {pct_vs_promedio:+.2f}% vs promedio
+      </div>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;">
+    <div style="background:rgba(255,255,255,0.04);border-radius:8px;padding:10px;text-align:center;">
+      <div style="font-size:9px;color:rgba(255,255,255,0.35);text-transform:uppercase;margin-bottom:4px;">Precio actual</div>
+      <div style="font-size:15px;font-weight:800;color:#fff;">{precio_actual:,.2f}</div>
+    </div>
+    <div style="background:rgba(255,255,255,0.04);border-radius:8px;padding:10px;text-align:center;">
+      <div style="font-size:9px;color:rgba(255,255,255,0.35);text-transform:uppercase;margin-bottom:4px;">Promedio</div>
+      <div style="font-size:15px;font-weight:800;color:#29b6f6;">{promedio:,.2f}</div>
+    </div>
+    <div style="background:rgba(255,255,255,0.04);border-radius:8px;padding:10px;text-align:center;">
+      <div style="font-size:9px;color:rgba(255,255,255,0.35);text-transform:uppercase;margin-bottom:4px;">Mínimo</div>
+      <div style="font-size:15px;font-weight:800;color:#00d68f;">{minimo:,.2f}</div>
+    </div>
+    <div style="background:rgba(255,255,255,0.04);border-radius:8px;padding:10px;text-align:center;">
+      <div style="font-size:9px;color:rgba(255,255,255,0.35);text-transform:uppercase;margin-bottom:4px;">Máximo</div>
+      <div style="font-size:15px;font-weight:800;color:#ff6b6b;">{maximo:,.2f}</div>
+    </div>
+  </div>
+
+  <div style="border-top:1px solid rgba(41,182,246,0.15);padding-top:12px;display:flex;justify-content:space-between;align-items:center;">
+    <div style="font-size:11px;color:rgba(255,255,255,0.4);">
+      📦 Si comprás ahora ~{capital_usdt:.1f} USDT y vendés al promedio histórico:
+    </div>
+    <div style="font-size:13px;font-weight:800;color:{'#00d68f' if ganancia_hold > 0 else '#ff4444'};">
+      {'▲' if ganancia_hold > 0 else '▼'} {ganancia_hold:,.0f} {fiat} ({ganancia_hold_pct:+.2f}%)
+    </div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+                # Mini gráfico de evolución
+                if len(buy_prices) >= 3:
+                    import pandas as _pd
+                    timestamps = [r["ts"][:16].replace("T", " ") for r in registros[-len(buy_prices):]]
+                    df_hist = _pd.DataFrame({
+                        "Hora":          timestamps,
+                        "Precio compra": buy_prices,
+                        "Promedio":      [promedio] * len(buy_prices),
+                    })
+                    st.line_chart(df_hist.set_index("Hora"), color=["#29b6f6", "#ff8c00"])
+
+                st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
+
+            if not any(len(d.get("registros", [])) >= 2 for d in history_data.values()):
+                st.info("⏳ Acumulando datos... Volvé en unas horas para ver el análisis completo.")
 
     # ── TAB: TABLA ────────────────────────────────────────────────────────────
     with tab_table:
