@@ -580,7 +580,7 @@ body {
 .al:nth-child(2){ animation-delay: .10s; }
 .al:nth-child(3){ animation-delay: .15s; }
 .al:nth-child(n+4){ animation-delay: .20s; }
-.al:hover { border-color: rgba(255,255,255,0.18); box-shadow: 0 8px 32px rgba(0,0,0,0.5); background: rgba(255,255,255,0.05); }
+.al:hover { border-color: rgba(255,255,255,0.12); box-shadow: 0 8px 32px rgba(0,0,0,0.4); }
 
 .hi  { border-left: 3px solid #00d68f; }
 .mid { border-left: 3px solid #69f0ae; }
@@ -611,19 +611,10 @@ body {
 .clo { color: #ffd740; }
 .cne { color: #ef5350; }
 
-/* Alert body: oculto por defecto, visible al hover */
-.al-body { display: none; }
-.al:hover .al-body { display: flex; }
+/* Alert body: two price columns */
+.al-body { display: flex; }
 .al-col  { flex: 1; padding: 14px 20px 16px; }
 .al-col + .al-col { border-left: 1px solid rgba(255,255,255,0.05); }
-
-/* Alert footer: oculto por defecto, visible al hover */
-.al-ft {
-    display: none; align-items: center; flex-wrap: wrap;
-    padding: 8px 20px; border-top: 1px solid rgba(255,255,255,0.04);
-    background: rgba(0,0,0,0.14); font-size: 10.5px;
-}
-.al:hover .al-ft { display: flex; }
 
 .al-dir  { display: inline-block; font-size: 8px; font-weight: 700; text-transform: uppercase; letter-spacing: 2px; padding: 2px 8px; border-radius: 4px; margin-bottom: 5px; }
 .dv { color: #4fc3f7; background: rgba(79,195,247,0.08); }
@@ -640,6 +631,12 @@ body {
 .al-k { font-size: 10px; color: rgba(255,255,255,0.72); text-transform: uppercase; letter-spacing: 0.4px; font-weight: 600; flex-shrink: 0; }
 .al-v { font-size: 11.5px; color: rgba(255,255,255,0.88); font-weight: 500; text-align: right; max-width: 62%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+/* Alert footer */
+.al-ft {
+    display: flex; align-items: center; flex-wrap: wrap;
+    padding: 8px 20px; border-top: 1px solid rgba(255,255,255,0.04);
+    background: rgba(0,0,0,0.14); font-size: 10.5px;
+}
 .fl { color: rgba(255,255,255,0.18); }
 .fv { color: rgba(255,255,255,0.45); font-weight: 600; margin-left: 3px; }
 .fn { font-weight: 700; margin-left: 3px; }
