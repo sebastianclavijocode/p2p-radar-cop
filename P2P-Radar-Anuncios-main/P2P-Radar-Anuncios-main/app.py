@@ -1078,8 +1078,30 @@ def main() -> None:
                 # Mini gráfico de evolución
                 if len(buy_prices) >= 3:
                     import pandas as _pd
-                    timestamps = [r["ts"][:16].replace("T", " ") for r in registros[-len(buy_prices):]]
                     import altair as _alt
+                    timestamps = [r["ts"][:16].replace("T", " ") for r in registros[-len(buy_prices):]]
+
+                    # Rango del eje Y configurable
+                    precio_min_real = int(min(buy_prices) * 0.995)
+                    precio_max_real = int(max(buy_prices) * 1.005)
+                    gcol1, gcol2 = st.columns(2)
+                    y_min = gcol1.number_input(
+                        f"Eje Y mínimo — {nombre}",
+                        min_value=1000, max_value=9000,
+                        value=max(1000, precio_min_real - 100),
+                        step=50, key=f"ymin_{key}",
+                        label_visibility="collapsed",
+                    )
+                    y_max = gcol2.number_input(
+                        f"Eje Y máximo — {nombre}",
+                        min_value=1000, max_value=9999,
+                        value=min(9999, precio_max_real + 100),
+                        step=50, key=f"ymax_{key}",
+                        label_visibility="collapsed",
+                    )
+                    gcol1.caption(f"Y mín: {y_min:,}")
+                    gcol2.caption(f"Y máx: {y_max:,}")
+
                     df_hist = _pd.DataFrame({
                         "Hora":          timestamps,
                         "Precio compra": buy_prices,
@@ -1088,7 +1110,7 @@ def main() -> None:
                     df_melt = df_hist.melt("Hora", var_name="Serie", value_name="Precio")
                     chart = _alt.Chart(df_melt).mark_line().encode(
                         x=_alt.X("Hora:N", axis=_alt.Axis(labelAngle=-45, labelLimit=80)),
-                        y=_alt.Y("Precio:Q", scale=_alt.Scale(domain=[3000, 4000]), title="COP"),
+                        y=_alt.Y("Precio:Q", scale=_alt.Scale(domain=[y_min, y_max]), title="COP"),
                         color=_alt.Color("Serie:N", scale=_alt.Scale(
                             domain=["Precio compra", "Promedio"],
                             range=["#29b6f6", "#ff8c00"]
