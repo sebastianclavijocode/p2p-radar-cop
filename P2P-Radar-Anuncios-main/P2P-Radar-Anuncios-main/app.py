@@ -1089,14 +1089,14 @@ def main() -> None:
                         f"Eje Y mínimo — {nombre}",
                         min_value=1000, max_value=9000,
                         value=max(1000, precio_min_real - 100),
-                        step=50, key=f"ymin_{key}",
+                        step=50, key=f"ymin_{method_id}",
                         label_visibility="collapsed",
                     )
                     y_max = gcol2.number_input(
                         f"Eje Y máximo — {nombre}",
                         min_value=1000, max_value=9999,
                         value=min(9999, precio_max_real + 100),
-                        step=50, key=f"ymax_{key}",
+                        step=50, key=f"ymax_{method_id}",
                         label_visibility="collapsed",
                     )
                     gcol1.caption(f"Y mín: {y_min:,}")
