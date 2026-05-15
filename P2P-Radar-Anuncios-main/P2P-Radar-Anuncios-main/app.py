@@ -1052,12 +1052,23 @@ def main() -> None:
                 if len(buy_prices) >= 3:
                     import pandas as _pd
                     timestamps = [r["ts"][:16].replace("T", " ") for r in registros[-len(buy_prices):]]
+                    import altair as _alt
                     df_hist = _pd.DataFrame({
                         "Hora":          timestamps,
                         "Precio compra": buy_prices,
                         "Promedio":      [promedio] * len(buy_prices),
                     })
-                    st.line_chart(df_hist.set_index("Hora"), color=["#29b6f6", "#ff8c00"])
+                    df_melt = df_hist.melt("Hora", var_name="Serie", value_name="Precio")
+                    chart = _alt.Chart(df_melt).mark_line().encode(
+                        x=_alt.X("Hora:N", axis=_alt.Axis(labelAngle=-45, labelLimit=80)),
+                        y=_alt.Y("Precio:Q", scale=_alt.Scale(domain=[3000, 4000]), title="COP"),
+                        color=_alt.Color("Serie:N", scale=_alt.Scale(
+                            domain=["Precio compra", "Promedio"],
+                            range=["#29b6f6", "#ff8c00"]
+                        )),
+                        tooltip=["Hora", "Serie", "Precio"]
+                    ).properties(height=200)
+                    st.altair_chart(chart, use_container_width=True)
 
                 st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
 
