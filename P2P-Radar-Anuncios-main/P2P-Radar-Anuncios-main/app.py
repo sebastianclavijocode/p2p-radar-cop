@@ -492,17 +492,25 @@ def main() -> None:
         auto_refresh_secs = auto_refresh_opts[auto_refresh_sel]
 
         if "last_auto_refresh" not in st.session_state:
-            st.session_state["last_auto_refresh"] = _time.time()
+            st.session_state["last_auto_refresh"] = 0.0
+        if "auto_refresh_trigger" not in st.session_state:
+            st.session_state["auto_refresh_trigger"] = False
 
         refresh = st.button("Actualizar ahora", use_container_width=True, type="primary")
 
-        # Disparar auto-refresh si corresponde
+        # Limpiar trigger después de usarlo
+        if st.session_state["auto_refresh_trigger"]:
+            st.session_state["auto_refresh_trigger"] = False
+            refresh = True
+
+        # Countdown y disparo
         if auto_refresh_secs > 0:
-            elapsed = _time.time() - st.session_state["last_auto_refresh"]
-            restante = int(auto_refresh_secs - elapsed)
+            elapsed   = _time.time() - st.session_state["last_auto_refresh"]
+            restante  = int(auto_refresh_secs - elapsed)
             if elapsed >= auto_refresh_secs:
-                st.session_state["last_auto_refresh"] = _time.time()
-                refresh = True
+                st.session_state["last_auto_refresh"]    = _time.time()
+                st.session_state["auto_refresh_trigger"] = True
+                st.rerun()
             else:
                 st.caption(f"⏱️ Próxima actualización en {restante}s")
                 _time.sleep(1)
@@ -613,10 +621,11 @@ def main() -> None:
 
     # ── VISTAS SECUNDARIAS (tabs debajo del dashboard) ────────────────────────
     st.markdown("<div style='margin-top:20px'></div>", unsafe_allow_html=True)
-    tab_scan, tab_tg, tab_hold, tab_table, tab_disc, tab_diag = st.tabs([
+    tab_scan, tab_tg, tab_hold, tab_calc, tab_table, tab_disc, tab_diag = st.tabs([
         "🔁 Escaneo",
         "📱 Telegram",
         "🔵 Hold",
+        "🧮 Calculadora",
         "📊 Tabla",
         f"🗑️ Descartadas ({disc_count})",
         "🔬 Diagnóstico",
@@ -1092,6 +1101,170 @@ def main() -> None:
 
             if not any(len(d.get("registros", [])) >= 2 for d in history_data.values()):
                 st.info("⏳ Acumulando datos... Volvé en unas horas para ver el análisis completo.")
+
+    # ── TAB: CALCULADORA 🧮 ───────────────────────────────────────────────────
+    with tab_calc:
+        _section("🧮", "Calculadora de operaciones P2P")
+        st.caption("Calculá la ganancia neta de cualquier operación con comisiones separadas para compra y venta.")
+
+        components.html("""
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}
+body{background:transparent;color:#fff;padding:8px 4px 16px;}
+.section{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:14px 16px;margin-bottom:10px;}
+.section-title{font-size:11px;font-weight:700;color:rgba(255,255,255,0.45);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;display:flex;align-items:center;gap:6px;}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;}
+.field label{font-size:11px;color:rgba(255,255,255,0.45);display:block;margin-bottom:4px;}
+.field input,.field select{width:100%;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;padding:7px 10px;font-size:13px;outline:none;}
+.field input:focus{border-color:rgba(255,255,255,0.25);}
+.radio-group{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;}
+.radio-btn{display:flex;align-items:center;gap:5px;font-size:12px;color:rgba(255,255,255,0.7);cursor:pointer;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:5px 10px;}
+.radio-btn:hover{background:rgba(255,255,255,0.1);}
+.radio-btn input{accent-color:#00d68f;}
+.result-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;}
+.metric{background:rgba(255,255,255,0.04);border-radius:8px;padding:10px 12px;}
+.metric-label{font-size:10px;color:rgba(255,255,255,0.4);margin-bottom:4px;}
+.metric-value{font-size:18px;font-weight:700;color:#fff;}
+.metric-value.pos{color:#00d68f;}
+.metric-value.neg{color:#ff4444;}
+.metric-sub{font-size:10px;color:rgba(255,255,255,0.3);margin-top:2px;}
+.fee-detail{font-size:11px;color:rgba(255,255,255,0.4);background:rgba(255,255,255,0.03);border-radius:8px;padding:8px 12px;margin-top:8px;display:flex;flex-direction:column;gap:4px;}
+.fee-row{display:flex;justify-content:space-between;}
+.custom-box{display:none;margin-top:8px;}
+</style>
+</head><body>
+
+<div class="section">
+  <div class="section-title"><i class="ti ti-arrow-up"></i> Compra</div>
+  <div class="grid3">
+    <div class="field"><label>Capital COP</label><input type="number" id="capitalCOP" value="2000000" step="10000"></div>
+    <div class="field"><label>Precio compra (COP/USDT)</label><input type="number" id="precioCom" value="3745" step="1"></div>
+    <div class="field"><label>USDT comprados (opcional)</label><input type="number" id="usdtCom" placeholder="Auto" step="0.01"></div>
+  </div>
+  <div style="margin-top:10px;">
+    <div class="section-title" style="margin-bottom:6px;">Comisión de compra</div>
+    <div class="radio-group">
+      <label class="radio-btn"><input type="radio" name="feeCom" value="maker" checked> Maker (0.25%)</label>
+      <label class="radio-btn"><input type="radio" name="feeCom" value="taker"> Taker ($0.07)</label>
+      <label class="radio-btn"><input type="radio" name="feeCom" value="none"> Sin comisión</label>
+      <label class="radio-btn"><input type="radio" name="feeCom" value="custom"> Personalizada</label>
+    </div>
+    <div class="custom-box" id="feeComCustom">
+      <div class="grid2" style="margin-top:8px;">
+        <div class="field"><label>% comisión compra</label><input type="number" id="feeComPct" value="0.25" step="0.01" min="0"></div>
+        <div class="field"><label>Fija USDT compra</label><input type="number" id="feeComFixed" value="0" step="0.01" min="0"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-title"><i class="ti ti-arrow-down"></i> Venta</div>
+  <div class="grid2">
+    <div class="field"><label>Precio venta (COP/USDT)</label><input type="number" id="precioVen" value="3810" step="1"></div>
+    <div class="field"><label>USDT vendidos (opcional)</label><input type="number" id="usdtVen" placeholder="Auto (igual a compra)"></div>
+  </div>
+  <div style="margin-top:10px;">
+    <div class="section-title" style="margin-bottom:6px;">Comisión de venta</div>
+    <div class="radio-group">
+      <label class="radio-btn"><input type="radio" name="feeVen" value="maker" checked> Maker (0.25%)</label>
+      <label class="radio-btn"><input type="radio" name="feeVen" value="taker"> Taker ($0.07)</label>
+      <label class="radio-btn"><input type="radio" name="feeVen" value="none"> Sin comisión</label>
+      <label class="radio-btn"><input type="radio" name="feeVen" value="custom"> Personalizada</label>
+    </div>
+    <div class="custom-box" id="feeVenCustom">
+      <div class="grid2" style="margin-top:8px;">
+        <div class="field"><label>% comisión venta</label><input type="number" id="feeVenPct" value="0.25" step="0.01" min="0"></div>
+        <div class="field"><label>Fija USDT venta</label><input type="number" id="feeVenFixed" value="0" step="0.01" min="0"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-title"><i class="ti ti-chart-bar"></i> Resultado</div>
+  <div class="result-grid">
+    <div class="metric"><div class="metric-label">USDT operados</div><div class="metric-value" id="resUSDT">—</div></div>
+    <div class="metric"><div class="metric-label">Comisión compra</div><div class="metric-value" id="resFeeCom">—</div><div class="metric-sub" id="resFeeComCOP">—</div></div>
+    <div class="metric"><div class="metric-label">Comisión venta</div><div class="metric-value" id="resFeeVen">—</div><div class="metric-sub" id="resFeeVenCOP">—</div></div>
+    <div class="metric"><div class="metric-label">Capital recuperado</div><div class="metric-value" id="resCapRec">—</div></div>
+    <div class="metric"><div class="metric-label">Ganancia bruta</div><div class="metric-value" id="resGanBruta">—</div></div>
+    <div class="metric"><div class="metric-label">Ganancia neta</div><div class="metric-value pos" id="resGanNeta">—</div><div class="metric-sub" id="resGanPct">—</div></div>
+  </div>
+  <div class="fee-detail" id="feeDetail"></div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const fmt = (n,d=2) => isNaN(n)?'—':n.toLocaleString('es-CO',{minimumFractionDigits:d,maximumFractionDigits:d});
+const fmtCOP = n => isNaN(n)?'—':'$'+fmt(n,0);
+const getFee = name => document.querySelector(`input[name="${name}"]:checked`)?.value||'maker';
+
+function calcFee(type,usdt,pctId,fixedId){
+  if(type==='maker') return {usdt:usdt*0.0025,label:'Maker 0.25%'};
+  if(type==='taker') return {usdt:0.07,label:'Taker $0.07 USDT'};
+  if(type==='none')  return {usdt:0,label:'Sin comisión'};
+  const pct=(parseFloat($(pctId)?.value||0))/100;
+  const fix=parseFloat($(fixedId)?.value||0);
+  return {usdt:usdt*pct+fix,label:`${$(pctId)?.value}% + $${fix} USDT`};
+}
+
+function calculate(){
+  const capitalCOP=parseFloat($('capitalCOP').value)||0;
+  const precioCom=parseFloat($('precioCom').value)||0;
+  const precioVen=parseFloat($('precioVen').value)||0;
+  if(!capitalCOP||!precioCom||!precioVen) return;
+
+  const usdtComRaw=parseFloat($('usdtCom').value);
+  const usdtBruto=isNaN(usdtComRaw)||usdtComRaw<=0?capitalCOP/precioCom:usdtComRaw;
+
+  const feeCom=calcFee(getFee('feeCom'),usdtBruto,'feeComPct','feeComFixed');
+  const usdtNeto=usdtBruto-feeCom.usdt;
+
+  const usdtVenRaw=parseFloat($('usdtVen').value);
+  const usdtVender=isNaN(usdtVenRaw)||usdtVenRaw<=0?usdtNeto:usdtVenRaw;
+
+  const feeVen=calcFee(getFee('feeVen'),usdtVender,'feeVenPct','feeVenFixed');
+  const usdtFinal=usdtVender-feeVen.usdt;
+
+  const capRec=usdtFinal*precioVen;
+  const ganNeta=capRec-capitalCOP;
+  const ganPct=(ganNeta/capitalCOP)*100;
+  const feeComCOP=feeCom.usdt*precioCom;
+  const feeVenCOP=feeVen.usdt*precioVen;
+
+  $('resUSDT').textContent=fmt(usdtBruto)+' USDT';
+  $('resFeeCom').textContent=fmt(feeCom.usdt)+' USDT';
+  $('resFeeComCOP').textContent='≈ '+fmtCOP(feeComCOP);
+  $('resFeeVen').textContent=fmt(feeVen.usdt)+' USDT';
+  $('resFeeVenCOP').textContent='≈ '+fmtCOP(feeVenCOP);
+  $('resCapRec').textContent=fmtCOP(capRec);
+  $('resGanBruta').textContent=fmtCOP(capRec-capitalCOP+(feeVen.usdt*precioVen));
+  const netaEl=$('resGanNeta');
+  netaEl.textContent=fmtCOP(ganNeta);
+  netaEl.className='metric-value '+(ganNeta>=0?'pos':'neg');
+  $('resGanPct').textContent=(ganPct>=0?'+':'')+ganPct.toFixed(4)+'%';
+  $('feeDetail').innerHTML=
+    `<div class="fee-row"><span>Comisión compra</span><span>${feeCom.label} = ${fmt(feeCom.usdt)} USDT (${fmtCOP(feeComCOP)})</span></div>`+
+    `<div class="fee-row"><span>Comisión venta</span><span>${feeVen.label} = ${fmt(feeVen.usdt)} USDT (${fmtCOP(feeVenCOP)})</span></div>`+
+    `<div class="fee-row"><span>USDT netos vendidos</span><span>${fmt(usdtFinal)} USDT</span></div>`;
+}
+
+['capitalCOP','precioCom','precioVen','usdtCom','usdtVen','feeComPct','feeComFixed','feeVenPct','feeVenFixed']
+  .forEach(id=>{const el=$(id);if(el)el.addEventListener('input',calculate);});
+document.querySelectorAll('input[type=radio]').forEach(r=>r.addEventListener('change',()=>{
+  $('feeComCustom').style.display=getFee('feeCom')==='custom'?'block':'none';
+  $('feeVenCustom').style.display=getFee('feeVen')==='custom'?'block':'none';
+  calculate();
+}));
+calculate();
+</script>
+</body></html>
+""", height=820, scrolling=False)
 
     # ── TAB: TABLA ────────────────────────────────────────────────────────────
     with tab_table:
