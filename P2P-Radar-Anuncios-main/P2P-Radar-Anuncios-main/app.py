@@ -449,33 +449,31 @@ def main() -> None:
 
         st.divider()
         if exchange_name == "Binance":
-            st.markdown(
-                '<div style="font-size:12px;text-transform:uppercase;letter-spacing:1px;'
-                'color:rgba(255,255,255,0.75);font-weight:700;margin-bottom:6px;">'
-                'Comisión maker por divisa</div>'
-                '<div style="font-size:10px;color:rgba(255,255,255,0.35);margin-bottom:10px;">'
-                'Editá los valores según tu nivel en Binance.</div>',
-                unsafe_allow_html=True,
-            )
-            # Inicializar fees editables en session_state
-            if "maker_fees" not in st.session_state:
-                st.session_state["maker_fees"] = {
-                    fk: (fv["verified"] if is_verified else fv["non_verified"])
-                    for fk, fv in BINANCE_MAKER_FEES.items()
-                }
-            for fk in BINANCE_MAKER_FEES:
-                col_fiat, col_val = st.columns([1, 1])
-                col_fiat.markdown(
-                    f'<div style="font-size:12px;font-weight:700;color:rgba(255,255,255,0.65);'
-                    f'text-transform:uppercase;letter-spacing:0.8px;padding-top:8px;">{fk}</div>',
-                    unsafe_allow_html=True
-                )
-                new_val = col_val.number_input(
-                    f"fee_{fk}", min_value=0.0, max_value=5.0,
-                    value=float(st.session_state["maker_fees"].get(fk, BINANCE_MAKER_FEES[fk]["verified"])),
-                    step=0.01, format="%.2f",
-                    label_visibility="collapsed", key=f"fee_input_{fk}"
-                )
+            with st.expander("💸 Comisión maker por divisa", expanded=False):
+                st.caption("Editá los valores según tu nivel en Binance.")
+                if "maker_fees" not in st.session_state:
+                    st.session_state["maker_fees"] = {
+                        fk: (fv["verified"] if is_verified else fv["non_verified"])
+                        for fk, fv in BINANCE_MAKER_FEES.items()
+                    }
+                for fk in BINANCE_MAKER_FEES:
+                    col_fiat, col_val = st.columns([1, 1])
+                    col_fiat.markdown(
+                        f'<div style="font-size:12px;font-weight:700;color:rgba(255,255,255,0.65);'
+                        f'text-transform:uppercase;letter-spacing:0.8px;padding-top:8px;">{fk}</div>',
+                        unsafe_allow_html=True
+                    )
+                    new_val = col_val.number_input(
+                        f"fee_{fk}", min_value=0.0, max_value=5.0,
+                        value=float(st.session_state["maker_fees"].get(fk, BINANCE_MAKER_FEES[fk]["verified"])),
+                        step=0.01, format="%.2f",
+                        label_visibility="collapsed", key=f"fee_input_{fk}"
+                    )
+                    st.session_state["maker_fees"][fk] = new_val
+                    BINANCE_MAKER_FEES[fk]["verified"]     = new_val
+                    BINANCE_MAKER_FEES[fk]["non_verified"] = new_val
+        else:
+            st.caption("Sin comisión (0%)")
                 st.session_state["maker_fees"][fk] = new_val
                 # Actualizar el dict global para que lo usen los cálculos
                 BINANCE_MAKER_FEES[fk]["verified"]     = new_val
@@ -488,7 +486,33 @@ def main() -> None:
         _mapping_panel(exchange_name, st.session_state["mappings"], st.session_state.get("custom_methods", []))
         st.divider()
 
+        # Auto-refresh
+        import time as _time
+        auto_refresh_opts = {"Desactivado": 0, "30 seg": 30, "1 min": 60, "2 min": 120, "5 min": 300}
+        auto_refresh_sel  = st.selectbox(
+            "🔄 Auto-actualizar cada",
+            list(auto_refresh_opts.keys()),
+            index=0,
+            key="auto_refresh_sel",
+        )
+        auto_refresh_secs = auto_refresh_opts[auto_refresh_sel]
+
+        if "last_auto_refresh" not in st.session_state:
+            st.session_state["last_auto_refresh"] = _time.time()
+
         refresh = st.button("Actualizar ahora", use_container_width=True, type="primary")
+
+        # Disparar auto-refresh si corresponde
+        if auto_refresh_secs > 0:
+            elapsed = _time.time() - st.session_state["last_auto_refresh"]
+            restante = int(auto_refresh_secs - elapsed)
+            if elapsed >= auto_refresh_secs:
+                st.session_state["last_auto_refresh"] = _time.time()
+                refresh = True
+            else:
+                st.caption(f"⏱️ Próxima actualización en {restante}s")
+                _time.sleep(1)
+                st.rerun()
 
 
     # ── QUERY ─────────────────────────────────────────────────────────────────
