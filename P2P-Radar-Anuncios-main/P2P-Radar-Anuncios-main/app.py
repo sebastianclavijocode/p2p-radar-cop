@@ -621,11 +621,12 @@ def main() -> None:
 
     # ── VISTAS SECUNDARIAS (tabs debajo del dashboard) ────────────────────────
     st.markdown("<div style='margin-top:20px'></div>", unsafe_allow_html=True)
-    tab_scan, tab_tg, tab_hold, tab_calc, tab_table, tab_disc, tab_diag = st.tabs([
+    tab_scan, tab_tg, tab_hold, tab_calc, tab_heat, tab_table, tab_disc, tab_diag = st.tabs([
         "🔁 Escaneo",
         "📱 Telegram",
         "🔵 Hold",
         "🧮 Calculadora",
+        "🌡️ Mapa de calor",
         "📊 Tabla",
         f"🗑️ Descartadas ({disc_count})",
         "🔬 Diagnóstico",
@@ -1214,7 +1215,7 @@ body{background:transparent;color:#fff;padding:8px 4px 16px;}
     <div class="metric"><div class="metric-label">Comisión compra</div><div class="metric-value" id="resFeeCom">—</div><div class="metric-sub" id="resFeeComCOP">—</div></div>
     <div class="metric"><div class="metric-label">Comisión venta</div><div class="metric-value" id="resFeeVen">—</div><div class="metric-sub" id="resFeeVenCOP">—</div></div>
     <div class="metric"><div class="metric-label">Capital recuperado</div><div class="metric-value" id="resCapRec">—</div></div>
-    <div class="metric"><div class="metric-label">Ganancia bruta</div><div class="metric-value" id="resGanBruta">—</div></div>
+    <div class="metric"><div class="metric-label">Brecha (spread bruto)</div><div class="metric-value" id="resSpread">—</div><div class="metric-sub" id="resSpreadCOP">—</div></div>
     <div class="metric"><div class="metric-label">Ganancia neta</div><div class="metric-value pos" id="resGanNeta">—</div><div class="metric-sub" id="resGanPct">—</div></div>
   </div>
   <div class="fee-detail" id="feeDetail"></div>
@@ -1287,6 +1288,153 @@ calculate();
 </script>
 </body></html>
 """, height=820, scrolling=False)
+
+    # ── TAB: MAPA DE CALOR 🌡️ ────────────────────────────────────────────────
+    with tab_heat:
+        _section("🌡️", "Mapa de calor — mejores horas para operar")
+        st.caption("Spread neto promedio por hora del día y día de la semana. Más verde = mejor oportunidad de arbitraje en COP.")
+
+        import requests as _req2, base64 as _b642
+        from datetime import datetime as _dtime, timedelta as _td
+        import statistics as _stats2
+
+        GH_REPO_HEAT    = "sebastianclavijocode/p2p-radar-cop"
+        HISTORY_PATH_HEAT = "P2P-Radar-Anuncios-main/P2P-Radar-Anuncios-main/price_history.json"
+
+        @st.cache_data(ttl=600)
+        def _load_history_heat():
+            url = f"https://api.github.com/repos/{GH_REPO_HEAT}/contents/{HISTORY_PATH_HEAT}"
+            try:
+                r = _req2.get(url, headers={"Accept": "application/vnd.github.v3+json"}, timeout=15)
+                if r.status_code == 200:
+                    return json.loads(_b642.b64decode(r.json()["content"]).decode("utf-8"))
+            except: pass
+            return {}
+
+        hist = _load_history_heat()
+
+        if not hist:
+            st.info("⏳ No hay historial todavía. El bot guarda precios cada 10 minutos automáticamente.")
+        else:
+            # ── Filtros ───────────────────────────────────────────────────────
+            fc1, fc2 = st.columns([2, 2])
+            periodo_opts = {"Últimos 7 días": 7, "Últimos 14 días": 14, "Últimos 30 días": 30, "Todo": 9999, "Personalizado": 0}
+            periodo_sel  = fc1.selectbox("Período", list(periodo_opts.keys()), key="ht_periodo")
+            metodo_names = ["Todos"] + [d.get("nombre", mid) for mid, d in hist.items()]
+            metodo_sel   = fc2.selectbox("Método", metodo_names, key="ht_metodo")
+
+            fecha_ini = fecha_fin = None
+            if periodo_sel == "Personalizado":
+                pc1, pc2 = st.columns(2)
+                fecha_ini = pc1.date_input("Desde", key="ht_desde")
+                fecha_fin = pc2.date_input("Hasta", key="ht_hasta")
+
+            dias_filtro = periodo_opts.get(periodo_sel, 7)
+            now_utc = _dtime.utcnow()
+
+            # ── Recolectar registros ──────────────────────────────────────────
+            registros_flat = []
+            for mid, data in hist.items():
+                nombre_m = data.get("nombre", mid)
+                if metodo_sel != "Todos" and nombre_m != metodo_sel:
+                    continue
+                for r in data.get("registros", []):
+                    try:
+                        ts = _dtime.fromisoformat(r["ts"].replace("Z", ""))
+                        if periodo_sel == "Personalizado" and fecha_ini and fecha_fin:
+                            if not (fecha_ini <= ts.date() <= fecha_fin): continue
+                        elif dias_filtro < 9999:
+                            if (now_utc - ts).days >= dias_filtro: continue
+                        registros_flat.append({
+                            "hora":   ts.hour,
+                            "dia":    ts.weekday(),
+                            "spread": abs(r.get("spread_pct", 0)),
+                        })
+                    except: continue
+
+            if len(registros_flat) < 3:
+                st.info("⏳ Pocos datos para este período. Seleccioná un rango más amplio o esperá más registros.")
+            else:
+                # ── Calcular matriz 7x24 ──────────────────────────────────────
+                DIAS_ES = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+                matriz  = [[[] for _ in range(24)] for _ in range(7)]
+                for r in registros_flat:
+                    matriz[r["dia"]][r["hora"]].append(r["spread"])
+
+                promedios = [
+                    [round(_stats2.mean(v), 4) if v else None for v in row]
+                    for row in matriz
+                ]
+                todos_vals = [v for row in promedios for v in row if v is not None]
+                mx = max(todos_vals) if todos_vals else 1
+                mn = min(todos_vals) if todos_vals else 0
+
+                # Mejores horas globales
+                hora_prom = {}
+                for h in range(24):
+                    vals = [promedios[d][h] for d in range(7) if promedios[d][h] is not None]
+                    if vals: hora_prom[h] = round(_stats2.mean(vals), 4)
+                top3 = sorted(hora_prom, key=hora_prom.get, reverse=True)[:3]
+                st.success(f"🏆 Mejores horas: " + "  ·  ".join([f"**{h}:00** ({hora_prom[h]:.3f}%)" for h in top3]))
+                st.caption(f"Basado en {len(registros_flat)} registros de {metodo_sel}")
+
+                # ── Renderizar heatmap HTML ───────────────────────────────────
+                def color_cell(v, mn, mx):
+                    if v is None: return "rgba(255,255,255,0.04)", "—"
+                    t = (v - mn) / (mx - mn + 0.0001)
+                    if   t < 0.2: c = "#1a2a1a"
+                    elif t < 0.4: c = "#1e3d1e"
+                    elif t < 0.6: c = "#2a5e2a"
+                    elif t < 0.8: c = "#3a8a3a"
+                    else:         c = "#00d68f"
+                    return c, f"{v:.3f}%"
+
+                CW, CH = 34, 30
+                rows_html = ""
+                # Cabecera horas
+                hora_th = "".join(
+                    f'<div style="font-size:10px;color:rgba(255,255,255,0.4);text-align:center;line-height:{CH}px;">'
+                    f'{"" if h%4!=0 else str(h)}</div>'
+                    for h in range(24)
+                )
+                rows_html += f'<div style="display:grid;grid-template-columns:40px repeat(24,{CW}px);gap:2px;margin-bottom:2px;"><div></div>{hora_th}</div>'
+
+                for di, dia in enumerate(DIAS_ES):
+                    cells = ""
+                    for h in range(24):
+                        bg, label = color_cell(promedios[di][h], mn, mx)
+                        is_top = h in top3
+                        border = "2px solid #ffd700" if is_top else "none"
+                        cells += (
+                            f'<div title="{dia} {h}:00 → {label}" style="'
+                            f'width:{CW-2}px;height:{CH-2}px;background:{bg};border-radius:3px;'
+                            f'border:{border};box-sizing:border-box;cursor:pointer;'
+                            f'display:flex;align-items:center;justify-content:center;"></div>'
+                        )
+                    rows_html += (
+                        f'<div style="display:grid;grid-template-columns:40px repeat(24,{CW}px);gap:2px;margin-bottom:2px;">'
+                        f'<div style="font-size:11px;color:rgba(255,255,255,0.5);line-height:{CH}px;text-align:right;padding-right:6px;">{dia}</div>'
+                        f'{cells}</div>'
+                    )
+
+                # Leyenda
+                leyenda = "".join(
+                    f'<div style="width:18px;height:14px;background:{c};border-radius:2px;"></div>'
+                    for c in ["#1a2a1a","#1e3d1e","#2a5e2a","#3a8a3a","#00d68f"]
+                )
+
+                components.html(f"""
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>body{{margin:0;padding:4px 2px 12px;background:transparent;font-family:-apple-system,sans-serif;}}</style>
+</head><body>
+{rows_html}
+<div style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:11px;color:rgba(255,255,255,0.4);">
+  <span>Bajo</span>{leyenda}<span>Alto</span>
+  <span style="margin-left:12px;color:rgba(255,255,255,0.25);">Pasá el mouse por cada celda para ver el valor exacto</span>
+  <span style="margin-left:12px;">⭐ = top 3 horas</span>
+</div>
+</body></html>
+""", height=len(DIAS_ES) * (CH + 4) + 80, scrolling=False)
 
     # ── TAB: TABLA ────────────────────────────────────────────────────────────
     with tab_table:
