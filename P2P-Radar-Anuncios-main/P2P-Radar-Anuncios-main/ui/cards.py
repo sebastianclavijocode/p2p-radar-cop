@@ -520,106 +520,83 @@ function copyAlert(btnId, text) {
 # ── Taker-Taker card HTML ─────────────────────────────────────────────────────
 
 def build_taker_cards_html(taker_opportunities: list) -> str:
-    """
-    taker_opportunities: lista de dicts con:
-      {method_human, fiat, asset, taker_buy, taker_sell, ganancia_cop, ganancia_pct, cantidad_usdt}
-    """
     if not taker_opportunities:
         return ""
 
     cards = []
     for t in taker_opportunities:
-        pct   = t["ganancia_pct"]
-        pct_s = f"+{pct:.3f}%"
-        cards.append(f"""
-<div style="
-  background: linear-gradient(135deg, rgba(255,140,0,0.12), rgba(255,100,0,0.06));
-  border: 1px solid rgba(255,140,0,0.45);
-  border-left: 4px solid #ff8c00;
-  border-radius: 14px;
-  padding: 16px 20px;
-  margin-bottom: 14px;
-  position: relative;
-  overflow: hidden;
-">
-  <!-- Overlay sutil -->
-  <div style="
-    position:absolute;top:0;left:0;right:0;bottom:0;
-    background: repeating-linear-gradient(
-      45deg, transparent, transparent 8px,
-      rgba(255,140,0,0.03) 8px, rgba(255,140,0,0.03) 16px
-    );
-    pointer-events:none;
-  "></div>
-
-  <!-- Header -->
+        pct      = t["ganancia_pct"]
+        pct_s    = f"+{pct:.3f}%"
+        fiat     = t["fiat"]
+        asset    = t["asset"]
+        liq_cop  = t.get("capital_operable_cop", t["capital"])
+        liq_usdt = t.get("cantidad_usdt_real", t["cantidad_usdt"])
+        gan_real = t.get("ganancia_real_cop", t["ganancia_cop"])
+        gan_cfg  = t["ganancia_cop"]
+        cap_cfg  = t["capital"]
+        usdt_cfg = t["cantidad_usdt"]
+        dentro   = t.get("dentro_limites", False)
+        buy_min  = t.get("buy_min", 0)
+        buy_max  = t.get("buy_max", 0)
+        sell_min = t.get("sell_min", 0)
+        sell_max = t.get("sell_max", 0)
+        lim_color  = "rgba(0,214,143,0.08)"  if dentro else "rgba(255,68,68,0.08)"
+        lim_border = "rgba(0,214,143,0.25)"  if dentro else "rgba(255,68,68,0.25)"
+        lim_text   = "#00d68f" if dentro else "#ff4444"
+        lim_msg    = "✅ Capital dentro de límites — podés operar" if dentro else "⚠️ Capital fuera de límites"
+        gan_color  = "00d68f" if gan_real > 0 else "ff4444"
+        card = f"""<div style="background:linear-gradient(135deg,rgba(255,140,0,0.12),rgba(255,100,0,0.06));border:1px solid rgba(255,140,0,0.45);border-left:4px solid #ff8c00;border-radius:14px;padding:16px 20px;margin-bottom:14px;">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;">
     <div>
-      <div style="font-size:13px;font-weight:800;color:#fff;letter-spacing:0.3px;">
-        🟠 {t['method_human']}
-      </div>
-      <div style="font-size:10px;color:rgba(255,255,255,0.45);margin-top:2px;">
-        {t['fiat']} / {t['asset']} &nbsp;·&nbsp; TAKER-TAKER (sin anuncio)
-      </div>
+      <div style="font-size:13px;font-weight:800;color:#fff;">🟠 {t['method_human']}</div>
+      <div style="font-size:10px;color:rgba(255,255,255,0.45);margin-top:2px;">{fiat} / {asset} · TAKER-TAKER (sin anuncio)</div>
     </div>
     <div style="text-align:right;">
-      <div style="font-size:22px;font-weight:900;color:#ff8c00;line-height:1;">{pct_s}</div>
-      <div style="font-size:9px;color:rgba(255,140,0,0.6);text-transform:uppercase;letter-spacing:0.8px;">ganancia neta</div>
+      <div style="font-size:22px;font-weight:900;color:#ff8c00;">{pct_s}</div>
+      <div style="font-size:9px;color:rgba(255,140,0,0.6);text-transform:uppercase;">spread bruto</div>
     </div>
   </div>
-
-  <!-- Precios -->
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
     <div style="background:rgba(0,200,100,0.08);border:1px solid rgba(0,200,100,0.2);border-radius:8px;padding:10px 12px;">
-      <div style="font-size:9px;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:4px;">
-        📗 Comprás directamente
-      </div>
-      <div style="font-size:18px;font-weight:800;color:#00d68f;">
-        {t['taker_buy']:,.2f} <span style="font-size:11px;font-weight:500;color:rgba(255,255,255,0.5);">{t['fiat']}</span>
-      </div>
-      <div style="font-size:9px;color:rgba(255,255,255,0.3);margin-top:2px;">tab Comprar · como taker</div>
+      <div style="font-size:9px;color:rgba(255,255,255,0.4);text-transform:uppercase;margin-bottom:4px;">📗 Comprás directamente</div>
+      <div style="font-size:18px;font-weight:800;color:#00d68f;">{t['taker_buy']:,.2f} <span style="font-size:11px;color:rgba(255,255,255,0.5);">{fiat}</span></div>
+      <div style="font-size:9px;color:rgba(255,255,255,0.3);margin-top:2px;">tab Comprar · límite: {buy_min:,.0f}–{buy_max:,.0f} {fiat}</div>
     </div>
     <div style="background:rgba(255,80,80,0.08);border:1px solid rgba(255,80,80,0.2);border-radius:8px;padding:10px 12px;">
-      <div style="font-size:9px;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:4px;">
-        📕 Vendés directamente
-      </div>
-      <div style="font-size:18px;font-weight:800;color:#ff6b6b;">
-        {t['taker_sell']:,.2f} <span style="font-size:11px;font-weight:500;color:rgba(255,255,255,0.5);">{t['fiat']}</span>
-      </div>
-      <div style="font-size:9px;color:rgba(255,255,255,0.3);margin-top:2px;">tab Vender · como taker</div>
+      <div style="font-size:9px;color:rgba(255,255,255,0.4);text-transform:uppercase;margin-bottom:4px;">📕 Vendés directamente</div>
+      <div style="font-size:18px;font-weight:800;color:#ff6b6b;">{t['taker_sell']:,.2f} <span style="font-size:11px;color:rgba(255,255,255,0.5);">{fiat}</span></div>
+      <div style="font-size:9px;color:rgba(255,255,255,0.3);margin-top:2px;">tab Vender · límite: {sell_min:,.0f}–{sell_max:,.0f} {fiat}</div>
     </div>
   </div>
-
-  <!-- Footer -->
-  <div style="display:flex;justify-content:space-between;align-items:center;
-              border-top:1px solid rgba(255,140,0,0.15);padding-top:10px;font-size:10px;">
-    <span style="color:rgba(255,255,255,0.4);">
-      Capital ~{t['cantidad_usdt']:.1f} USDT ({t['capital']:,.0f} {t['fiat']})
-    </span>
-    <span style="color:#ff8c00;font-weight:700;">
-      Ganancia ≈ {t['ganancia_cop']:,.0f} {t['fiat']}
-    </span>
-    <span style="color:rgba(255,255,255,0.3);">
-      Comisión fija: $0.14 USDT
-    </span>
+  <div style="background:rgba(255,140,0,0.06);border:1px solid rgba(255,140,0,0.2);border-radius:8px;padding:10px 14px;margin-bottom:10px;">
+    <div style="font-size:9px;color:rgba(255,140,0,0.7);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px;">💧 Liquidez real del mercado</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+      <div>
+        <div style="font-size:9px;color:rgba(255,255,255,0.35);margin-bottom:2px;">Capital operable</div>
+        <div style="font-size:14px;font-weight:700;color:#ff8c00;">{liq_cop:,.0f} {fiat}</div>
+        <div style="font-size:9px;color:rgba(255,255,255,0.3);">≈ {liq_usdt:.1f} USDT</div>
+      </div>
+      <div>
+        <div style="font-size:9px;color:rgba(255,255,255,0.35);margin-bottom:2px;">Ganancia con liquidez real</div>
+        <div style="font-size:14px;font-weight:700;color:#{gan_color};">{gan_real:,.0f} {fiat}</div>
+        <div style="font-size:9px;color:rgba(255,255,255,0.3);">comisión $0.14 incluida</div>
+      </div>
+      <div>
+        <div style="font-size:9px;color:rgba(255,255,255,0.35);margin-bottom:2px;">Ganancia con tu capital</div>
+        <div style="font-size:14px;font-weight:700;color:rgba(255,255,255,0.7);">{gan_cfg:,.0f} {fiat}</div>
+        <div style="font-size:9px;color:rgba(255,255,255,0.3);">{cap_cfg:,.0f} {fiat} · {usdt_cfg:.1f} USDT</div>
+      </div>
+    </div>
   </div>
-
-  <!-- Compatibilidad de límites -->
-  <div style="margin-top:8px;padding:8px 10px;border-radius:8px;
-    background:{'rgba(0,214,143,0.08)' if t.get('dentro_limites') else 'rgba(255,68,68,0.08)'};
-    border:1px solid {'rgba(0,214,143,0.25)' if t.get('dentro_limites') else 'rgba(255,68,68,0.25)'};
-    font-size:10px;display:flex;justify-content:space-between;align-items:center;">
-    <span style="color:{'#00d68f' if t.get('dentro_limites') else '#ff4444'};font-weight:700;">
-      {'✅ Capital dentro de límites — podés operar' if t.get('dentro_limites') else '⚠️ Capital fuera de límites de algún anuncio'}
-    </span>
-    <span style="color:rgba(255,255,255,0.35);">
-      Compra: {t['buy_min']:,.0f}–{t['buy_max']:,.0f} · Venta: {t['sell_min']:,.0f}–{t['sell_max']:,.0f} {t['fiat']}
-    </span>
+  <div style="padding:8px 10px;border-radius:8px;background:{lim_color};border:1px solid {lim_border};font-size:10px;display:flex;justify-content:space-between;align-items:center;">
+    <span style="color:{lim_text};font-weight:700;">{lim_msg}</span>
+    <span style="color:rgba(255,255,255,0.35);">Cuello de botella: {min(buy_max,sell_max):,.0f} {fiat}</span>
   </div>
-</div>
-""")
+</div>"""
+        cards.append(card)
 
-    body = "\n".join(cards)
+    body = "
+".join(cards)
     return (
         f'<!DOCTYPE html><html><head><meta charset="utf-8">'
         f'<style>body{{margin:0;padding:4px 2px 8px;background:transparent;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}}</style>'
