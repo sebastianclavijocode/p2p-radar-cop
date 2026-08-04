@@ -518,7 +518,6 @@ function copyAlert(btnId, text) {
 
 
 # ── Taker-Taker card HTML ─────────────────────────────────────────────────────
-
 def build_taker_cards_html(taker_opportunities: list) -> str:
     if not taker_opportunities:
         return ""
@@ -545,7 +544,7 @@ def build_taker_cards_html(taker_opportunities: list) -> str:
         lim_text   = "#00d68f" if dentro else "#ff4444"
         lim_msg    = "✅ Capital dentro de límites — podés operar" if dentro else "⚠️ Capital fuera de límites"
         gan_color  = "00d68f" if gan_real > 0 else "ff4444"
-        card = f"""<div style="background:linear-gradient(135deg,rgba(255,140,0,0.12),rgba(255,100,0,0.06));border:1px solid rgba(255,140,0,0.45);border-left:4px solid #ff8c00;border-radius:14px;padding:16px 20px;margin-bottom:14px;">
+        cards.append(f"""<div style="background:linear-gradient(135deg,rgba(255,140,0,0.12),rgba(255,100,0,0.06));border:1px solid rgba(255,140,0,0.45);border-left:4px solid #ff8c00;border-radius:14px;padding:16px 20px;margin-bottom:14px;">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;">
     <div>
       <div style="font-size:13px;font-weight:800;color:#fff;">🟠 {t['method_human']}</div>
@@ -592,11 +591,9 @@ def build_taker_cards_html(taker_opportunities: list) -> str:
     <span style="color:{lim_text};font-weight:700;">{lim_msg}</span>
     <span style="color:rgba(255,255,255,0.35);">Cuello de botella: {min(buy_max,sell_max):,.0f} {fiat}</span>
   </div>
-</div>"""
-        cards.append(card)
+</div>""")
 
-    body = "
-".join(cards)
+    body = "\n".join(cards)
     return (
         f'<!DOCTYPE html><html><head><meta charset="utf-8">'
         f'<style>body{{margin:0;padding:4px 2px 8px;background:transparent;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}}</style>'
