@@ -4,14 +4,6 @@
     "fiat": "COP",
     "registros": [
       {
-        "ts": "2026-09-26T00:15:15.292799+00:00",
-        "buy_price": 3262.99,
-        "sell_price": 3260.72,
-        "taker_buy": 3262.99,
-        "taker_sell": 3261.02,
-        "spread_pct": -0.0698
-      },
-      {
         "ts": "2026-09-26T00:30:20.344715+00:00",
         "buy_price": 3261.5,
         "sell_price": 3262.1,
@@ -8066,6 +8058,14 @@
         "taker_buy": 3189.99,
         "taker_sell": 3196.0,
         "spread_pct": 0.017
+      },
+      {
+        "ts": "2026-10-06T00:30:21.351842+00:00",
+        "buy_price": 3197.0,
+        "sell_price": 3195.44,
+        "taker_buy": 3196.0,
+        "taker_sell": 3199.0,
+        "spread_pct": -0.0487
       }
     ]
   },
@@ -8073,14 +8073,6 @@
     "nombre": "Nequi",
     "fiat": "COP",
     "registros": [
-      {
-        "ts": "2026-09-26T00:15:20.570751+00:00",
-        "buy_price": 3255.26,
-        "sell_price": 3260.43,
-        "taker_buy": 3245.6,
-        "taker_sell": 3260.43,
-        "spread_pct": 0.1588
-      },
       {
         "ts": "2026-09-26T00:30:25.471162+00:00",
         "buy_price": 3253.77,
@@ -16136,6 +16128,14 @@
         "taker_buy": 3197.97,
         "taker_sell": 3195.0,
         "spread_pct": -0.1819
+      },
+      {
+        "ts": "2026-10-06T00:30:23.833960+00:00",
+        "buy_price": 3197.5,
+        "sell_price": 3196.94,
+        "taker_buy": 3195.0,
+        "taker_sell": 3200.0,
+        "spread_pct": -0.0175
       }
     ]
   },
@@ -16143,14 +16143,6 @@
     "nombre": "Daviplata",
     "fiat": "COP",
     "registros": [
-      {
-        "ts": "2026-09-26T00:15:23.142824+00:00",
-        "buy_price": 3273.1,
-        "sell_price": 3260.44,
-        "taker_buy": 3272.8,
-        "taker_sell": 3260.45,
-        "spread_pct": -0.3866
-      },
       {
         "ts": "2026-09-26T00:30:27.806511+00:00",
         "buy_price": 3271.95,
@@ -24206,6 +24198,14 @@
         "taker_buy": 3199.98,
         "taker_sell": 3195.0,
         "spread_pct": -0.2652
+      },
+      {
+        "ts": "2026-10-06T00:30:26.279636+00:00",
+        "buy_price": 3202.43,
+        "sell_price": 3190.31,
+        "taker_buy": 3202.0,
+        "taker_sell": 3195.0,
+        "spread_pct": -0.3784
       }
     ]
   },
@@ -24213,14 +24213,6 @@
     "nombre": "Llaves Bre-B",
     "fiat": "COP",
     "registros": [
-      {
-        "ts": "2026-09-26T00:15:25.663473+00:00",
-        "buy_price": 3264.26,
-        "sell_price": 3260.45,
-        "taker_buy": 3262.99,
-        "taker_sell": 3260.45,
-        "spread_pct": -0.1166
-      },
       {
         "ts": "2026-09-26T00:30:30.131082+00:00",
         "buy_price": 3264.0,
@@ -32276,6 +32268,14 @@
         "taker_buy": 3193.0,
         "taker_sell": 3195.0,
         "spread_pct": -0.0187
+      },
+      {
+        "ts": "2026-10-06T00:30:28.774753+00:00",
+        "buy_price": 3197.0,
+        "sell_price": 3196.5,
+        "taker_buy": 3196.0,
+        "taker_sell": 3200.0,
+        "spread_pct": -0.0155
       }
     ]
   }
