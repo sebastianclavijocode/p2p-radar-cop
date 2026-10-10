@@ -291,6 +291,11 @@ def main() -> None:
         page_icon="🤖", layout="wide",
         initial_sidebar_state="expanded",
     )
+    view = st.sidebar.radio("Vista", ["Rulos COP · datos reales", "Radar original · Yo publico"], key="radar-view")
+    if view == "Rulos COP · datos reales":
+        from ui.rulos import render
+        render()
+        return
     st.markdown(GLASS_CSS, unsafe_allow_html=True)
 
     for k, v in [
