@@ -156,7 +156,7 @@ def build_dashboard_html(
 
     best_cap_r = next((r for r in ok if r.capital_recommended_fiat), None)
     if best_cap_r and best_cap_r.capital_recommended_usdt:
-        cap_str = f"~{best_cap_r.capital_recommended_usdt:,.0f} USDT"
+        cap_str = f"~{best_cap_r.capital_recommended_usdt:,.8f} {best_cap_r.asset}"
     elif best_cap_r:
         cap_str = f"{best_cap_r.capital_recommended_fiat:,.0f} {best_cap_r.fiat}"
     else:
@@ -278,7 +278,7 @@ def build_kpi_html(
 
     best_cap_r = next((r for r in ok if r.capital_recommended_fiat), None)
     if best_cap_r and best_cap_r.capital_recommended_usdt:
-        cap_str = f"~{best_cap_r.capital_recommended_usdt:,.0f} USDT"
+        cap_str = f"~{best_cap_r.capital_recommended_usdt:,.8f} {best_cap_r.asset}"
     elif best_cap_r:
         cap_str = f"{best_cap_r.capital_recommended_fiat:,.0f} {best_cap_r.fiat}"
     else:

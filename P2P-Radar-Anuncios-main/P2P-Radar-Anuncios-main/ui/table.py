@@ -83,7 +83,7 @@ def render_ok_table(results: List[SpreadResult]) -> None:
             "Spread bruto":            _pct(r.spread_gross_pct),
             "Ganancia neta":           _pct(r.net_profit_pct),
             "Capital recomendado":     _fmt(r.capital_recommended_fiat, r.fiat, 0),
-            "Capital en USDT":         _fmt(r.capital_recommended_usdt, "USDT"),
+            "Capital en cripto":       f"{r.capital_recommended_usdt:.8f} {r.asset}" if r.capital_recommended_usdt is not None else "—",
             "Fuente del capital":      cap_source,
             "Anunciante ref. VENTA":   r.ref_buy_ad_label,
             "Anunciante ref. COMPRA":  r.ref_sell_ad_label,
