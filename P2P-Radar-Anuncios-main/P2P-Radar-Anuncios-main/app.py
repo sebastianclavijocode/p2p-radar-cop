@@ -98,6 +98,9 @@ def run_queries(
     ex_key = exchange_name.lower()
     results: List[SpreadResult] = []
     catalog = METHODS_CATALOG + extra_methods
+    if exchange_name == "Bybit":
+        catalog = [{"id":"bybit_cop", "human_name":"COP · todos los métodos Bybit", "fiat":"COP"}]
+        mappings = {"bybit":{"bybit_cop":{"payment_ids":[],"available":True}}}
 
     for method in catalog:
         mid, mname, fiat = method["id"], method["human_name"], method["fiat"]
@@ -390,8 +393,8 @@ def main() -> None:
                 label_visibility="collapsed")
         with st.expander("Cripto", expanded=True):
             asset = st.selectbox("Cripto",
-                ["USDT"],
-                help="La criptomoneda que se compra y vende. USDT es la más común en P2P.",
+                ["USDT", "USDC", "BTC", "ETH"],
+                help="Consulta la moneda elegida. La disponibilidad depende del exchange, moneda fiat y método de pago.",
                 label_visibility="collapsed")
 
         st.divider()
@@ -522,6 +525,18 @@ def main() -> None:
                 st.rerun()
 
 
+    if exchange_name == "Bybit":
+        st.info("Bybit usa la API oficial P2P. Consulta hasta 300 anuncios por lado y filtra los métodos por ID numérico. El filtro de verificados incluye VA y BA.")
+        if not bybit_ex.is_supported():
+            st.warning(bybit_ex.EXCHANGE_NOTE)
+            st.code('BYBIT_API_KEY = "tu_clave"\nBYBIT_API_SECRET = "tu_secreto"', language="toml")
+            st.caption("Configura estos valores en Settings → Secrets de Streamlit. No los publiques en GitHub. Solo se consulta el listado de anuncios.")
+            st.stop()
+
+    if st.session_state.get("last_asset") != asset or st.session_state["last_exchange"] != exchange_name:
+        st.session_state.pop("scan_results", None)
+        refresh = True
+
     # ── QUERY ─────────────────────────────────────────────────────────────────
     if refresh or (
         st.session_state["last_exchange"] != exchange_name
@@ -545,6 +560,7 @@ def main() -> None:
         st.session_state["results"]       = res
         st.session_state["last_update"]   = datetime.now()
         st.session_state["last_exchange"] = exchange_name
+        st.session_state["last_asset"] = asset
 
     results: List[SpreadResult] = st.session_state["results"]
 
@@ -552,6 +568,10 @@ def main() -> None:
         st.info("Presioná **Actualizar** en el sidebar para comenzar.")
         return
 
+    if exchange_name == "Bybit":
+        for message in dict.fromkeys(r.error_msg for r in results if r.status == "ERROR" and r.error_msg):
+            st.error(message)
+        st.caption("Consulta COP con todos los métodos. Revisa los IDs de pago de cada anuncio antes de comparar operaciones.")
     ok_results = [r for r in results if r.status == "OK"]
     disc_count = len(results) - len(ok_results)
 
@@ -575,7 +595,7 @@ def main() -> None:
     capital_cop_taker = taker_cfg["capital"]
     taker_ops = []
     for r in results:
-        if r.fiat != "COP": continue
+        if r.fiat != "COP" or asset != "USDT" or exchange_name != "Binance": continue
         if not r.ref_buy_ad or not r.ref_sell_ad: continue
         taker_buy  = r.ref_buy_ad.price
         taker_sell = r.ref_sell_ad.price
@@ -978,6 +998,7 @@ def main() -> None:
 
     # ── TAB: HOLD 🔵 ──────────────────────────────────────────────────────────
     with tab_hold:
+        st.caption("Historial independiente: Binance USDT/COP. No corresponde a otras criptomonedas seleccionadas.")
         _section("🔵", "Estrategia Hold — Comprar ahora, vender después")
         st.caption(
             "Analizá si el precio actual está por debajo del promedio histórico. "
@@ -989,7 +1010,7 @@ def main() -> None:
         import requests as _req, base64 as _b64
         GH_REPO_HOLD    = "sebastianclavijocode/p2p-radar-cop"
         HISTORY_PATH_HOLD = "P2P-Radar-Anuncios-main/P2P-Radar-Anuncios-main/price_history.json"
-        GH_PAT_HOLD     = st.secrets.get("GH_PAT", "") if hasattr(st, "secrets") else ""
+
 
         @st.cache_data(ttl=600)
         def _load_price_history():
@@ -1166,6 +1187,7 @@ def main() -> None:
 
     # ── TAB: CALCULADORA 🧮 ───────────────────────────────────────────────────
     with tab_calc:
+        st.caption("Calculadora independiente de USDT/COP; no usa la moneda seleccionada en el radar.")
         _section("🧮", "Calculadora de operaciones P2P")
         st.caption("Calculá la ganancia neta de cualquier operación con comisiones separadas para compra y venta.")
 

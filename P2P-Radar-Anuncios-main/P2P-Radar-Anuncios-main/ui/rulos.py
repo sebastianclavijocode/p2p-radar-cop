@@ -15,8 +15,8 @@ def cop(value):
 
 
 @st.cache_data(ttl=30, show_spinner=False)
-def snapshot(fees, methods, p2p):
-    return collect(fees, methods, p2p)
+def snapshot(fees, methods, p2p, assets):
+    return collect(fees, methods, p2p, assets)
 
 
 def render():
@@ -36,6 +36,8 @@ def render():
     with st.sidebar:
         st.header('Tu operación')
         capital = st.number_input('Capital inicial (COP)', min_value=1000.0, max_value=1e12, value=2000000.0, step=100000.0)
+        assets = st.multiselect('Criptomonedas del recorrido', ['BTC', 'ETH', 'SOL', 'USDC'], default=['BTC'])
+        st.caption('USDT conecta las entradas y salidas en COP. Se consultan los pares de las monedas elegidas; cada mercado informa su disponibilidad.')
         max_venues = st.selectbox('Máximo de exchanges', [2, 3], index=1)
         threshold = st.number_input('Rendimiento mínimo (%)', value=0.0, min_value=-100.0, max_value=100.0, step=0.1)
         cash_cost = st.number_input('Otros costos totales (COP)', min_value=0.0, value=0.0, step=1000.0,
@@ -56,26 +58,32 @@ def render():
             snapshot.clear()
 
     with st.expander('1 · Configurar transferencias entre exchanges', expanded=True):
-        st.write('Completa únicamente las rutas de retiro que tengas habilitadas. Cada dirección tiene su propia comisión.')
+        st.write('1. Busca la dirección que usarás. 2. Escribe la red compatible en ambas cuentas. 3. Completa comisión y mínimo de retiro. 4. Marca Confirmada solo en esa fila.')
+        st.caption('Las filas vacías se ignoran. No marques todas: cada dirección y moneda necesita su propia configuración.')
         st.caption('Red debe coincidir en retiro y depósito. Confirmada significa que tú revisaste disponibilidad, '
                    'comisión y mínimo hoy; la aplicación no consulta tu cuenta. Sin confirmación no se usa la transferencia.')
-        rows = [{'Origen': a, 'Destino': b, 'Activo': asset, 'Red': '', 'Comisión en activo': 0.0,
-                 'Mínimo de retiro': 0.0, 'Confirmada': False}
-                for asset in ('USDT', 'BTC') for a, b in permutations(('Binance', 'Bitso', 'Bybit'), 2)]
-        config = st.data_editor(pd.DataFrame(rows), hide_index=True, width='stretch',
-            disabled=['Origen', 'Destino', 'Activo'], key='rulo-transfers',
-            column_config={'Comisión en activo': st.column_config.NumberColumn(min_value=0.0, format='%.8f'),
+        rows = [{'Origen': a, 'Destino': b, 'Activo': asset, 'Red': {'USDT':'Tron (TRC20)', 'BTC':'Bitcoin', 'ETH':'Ethereum', 'SOL':'Solana', 'USDC':'Ethereum (ERC20)'}[asset], 'Comisión en activo': None,
+                 'Mínimo de retiro': None, 'Confirmada': False}
+                for asset in ('USDT', 'BTC', 'ETH', 'SOL', 'USDC') for a, b in permutations(('Binance', 'Bitso', 'Bybit'), 2)]
+        st.info('Redes sugeridas, aún no verificadas en tus cuentas. Confirma que existan en retiro y depósito; completa comisión y mínimo. No se supone costo cero.')
+        st.markdown('[Redes publicadas por Bitso](https://support.bitso.com/hc/en-us/articles/4419901801748-Which-network-to-use-to-deposit-or-withdraw-crypto-on-Bitso) · Verifica también el otro exchange.')
+        transfer_frame = pd.DataFrame(rows).astype({'Comisión en activo': 'float64', 'Mínimo de retiro':'float64'})
+        config = st.data_editor(transfer_frame, hide_index=True, width='stretch',
+            disabled=['Origen', 'Destino', 'Activo'], key='rulo-transfers-v2',
+            column_config={'Red': st.column_config.TextColumn(help='Nombre de la misma red en retiro y depósito. No es el nombre del exchange.'), 'Confirmada': st.column_config.CheckboxColumn(help='Marca después de completar red, comisión y mínimo de retiro.'), 'Comisión en activo': st.column_config.NumberColumn(min_value=0.0, format='%.8f'),
                            'Mínimo de retiro': st.column_config.NumberColumn(min_value=0.0, format='%.8f')})
         st.caption('La configuración se conserva durante esta sesión. No se envía dinero ni se guardan claves de exchanges.')
 
     transfers, errors = [], []
     for row in config.to_dict('records'):
-        if not row['Confirmada']:
+        if row['Activo'] not in ['USDT'] + assets or not row['Confirmada']:
             continue
         try:
             network = str(row['Red']).strip()
             if not network or network.lower() in ('none', 'nan'):
                 raise ValueError('falta la red')
+            if pd.isna(row['Comisión en activo']) or pd.isna(row['Mínimo de retiro']):
+                raise ValueError('falta comisión o mínimo de retiro')
             fee, minimum = number(row['Comisión en activo']), number(row['Mínimo de retiro'])
             if fee < 0 or minimum < 0:
                 raise ValueError('costos negativos')
@@ -84,13 +92,16 @@ def render():
                 label=f"Transferir {row['Activo']} por {network} · confirmación manual", reference='Configuración del usuario'))
         except (ValueError, ArithmeticError) as exc:
             errors.append(f"{row['Origen']} → {row['Destino']} ({row['Activo']}): {exc}")
-    for error in errors:
-        st.error(error)
+    if errors:
+        st.warning(f'{len(errors)} transferencias incompletas se excluyeron. Completa su red y costos o desmarca Confirmada. Las demás siguen disponibles.')
+        with st.expander('Ver transferencias pendientes'):
+            for error in errors:
+                st.write(error)
 
     @st.fragment(run_every=30 if automatic else None)
     def live_panel():
         with st.spinner('Consultando libros y anuncios…'):
-            edges, statuses, received = snapshot(fees, tuple(methods), p2p)
+            edges, statuses, received = snapshot(fees, tuple(methods), p2p, tuple(assets))
         now = time.time()
         fresh = [e for e in edges if -5 <= now - e.observed <= 90]
         c1, c2, c3 = st.columns(3)
@@ -111,7 +122,7 @@ def render():
                        'Binance spot y P2P registran hora de recepción; Bitso y Bybit spot usan la hora del libro. '
                        'No se sustituye una respuesta fallida por datos de ejemplo. Se consulta una página de hasta 20 anuncios por lado.')
         st.subheader('2 · Rutas y resultado estimado')
-        if not costs_ok or not transfers or errors:
+        if not costs_ok or not transfers:
             st.warning('Para calcular, confirma tus costos y al menos una transferencia válida en la tabla.')
             return
         routes = find_routes(fresh + transfers, capital, max_venues, cash_cost, slippage, now)
