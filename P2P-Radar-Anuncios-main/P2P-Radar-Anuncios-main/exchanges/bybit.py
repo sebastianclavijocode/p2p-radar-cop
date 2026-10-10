@@ -1,130 +1,96 @@
-"""
-Bybit P2P — public endpoint, no API key required.
-POST https://api2.bybit.com/fiat/otc/item/online
-
-Payment IDs are numeric strings (e.g. "8" = Mercado Pago).
-tradeType: "1" = we BUY, "0" = we SELL
-"""
-import logging
+"""Bybit official P2P ads API. Read-only, HMAC credentials from server secrets."""
+import hashlib
+import hmac
+import json
+import os
 import time
-from typing import List, Optional
-
+import math
 import requests
-
 from core.cache import TTLCache
 from core.models import P2PAd
 
-logger = logging.getLogger(__name__)
-
-_ENDPOINT = "https://api2.bybit.com/fiat/otc/item/online"
-_HEADERS  = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Content-Type": "application/json;charset=UTF-8",
-    "Accept": "application/json",
-}
-
-_cache = TTLCache(ttl_seconds=45)
-
-EXCHANGE_NOTE = (
-    "Bybit P2P — API pública sin key. Usa IDs numéricos para métodos de pago. "
-    "Confirmado: ID 8 = Mercado Pago. El resto no está confirmado; "
-    "editá el Mapeo si encontrás los IDs correctos."
-)
+_ENDPOINT = "https://api.bybit.com/v5/p2p/item/online"
+_cache = TTLCache(ttl_seconds=30)
+EXCHANGE_NOTE = "Bybit P2P requiere una cuenta anunciante y BYBIT_API_KEY / BYBIT_API_SECRET en Secrets."
 
 
-def _is_promoted(item: dict) -> bool:
-    return bool(
-        item.get("isAd")
-        or item.get("isPromoted")
-        or item.get("adType")
-    )
+def credentials():
+    key, secret = os.environ.get('BYBIT_API_KEY', ''), os.environ.get('BYBIT_API_SECRET', '')
+    if not (key and secret):
+        import streamlit as st
+        try:
+            key = st.secrets.get('BYBIT_API_KEY', '')
+            secret = st.secrets.get('BYBIT_API_SECRET', '')
+        except (FileNotFoundError, KeyError):
+            return '', ''
+    return str(key), str(secret)
 
 
-def _parse_ads(items: list, fiat: str, asset: str, exchange: str) -> List[P2PAd]:
-    ads: List[P2PAd] = []
+def is_supported():
+    return all(credentials())
+
+
+def _parse_ads(items, fiat, asset, exchange='Bybit'):
+    ads = []
     for item in items:
         try:
-            price = float(item.get("price", 0) or 0)
-            if price <= 0:
+            if item.get('tokenId') != asset or item.get('currencyId') != fiat:
                 continue
-            side  = item.get("side", "")
-            ttype = "BUY" if side == "1" else "SELL"
-            pays  = item.get("payments", []) or []
-            ad = P2PAd(
-                ad_id            = str(item.get("id", "")),
-                trade_type       = ttype,
-                asset            = item.get("tokenId", asset),
-                fiat             = item.get("currencyId", fiat),
-                price            = price,
-                min_amount       = float(item.get("minAmount", 0) or 0),
-                max_amount       = float(item.get("maxAmount", 0) or 0),
-                available_amount = float(item.get("quantity", 0) or item.get("lastQuantity", 0) or 0),
-                payment_methods  = [str(p.get("paymentType", "")) for p in pays],
-                advertiser_name  = str(item.get("nickName") or item.get("userId") or "Unknown"),
-                exchange         = exchange,
-                is_ad            = _is_promoted(item),
-                raw_data         = item,
-            )
-            ads.append(ad)
-        except (ValueError, TypeError, KeyError) as exc:
-            logger.debug(f"Bybit: skipping malformed ad – {exc}")
+            side = str(item['side'])
+            if side not in ('0', '1'):
+                continue
+            price, quantity = float(item['price']), float(item['lastQuantity'])
+            minimum, maximum = float(item['minAmount']), float(item['maxAmount'])
+            if not all(math.isfinite(v) for v in (price,quantity,minimum,maximum)) or price <= 0 or quantity <= 0 or minimum < 0 or maximum < minimum:
+                continue
+            pays = item.get('payments', [])
+            ads.append(P2PAd(str(item['id']), 'BUY' if side == '1' else 'SELL', asset, fiat,
+                price, minimum, maximum, quantity, [str(x) for x in pays],
+                str(item.get('nickName', '')), exchange, raw_data=item))
+        except (KeyError, TypeError, ValueError, AttributeError):
+            continue
     return ads
 
 
-def fetch_ads(
-    asset: str,
-    fiat: str,
-    trade_type: str,
-    pay_types: Optional[List[str]] = None,
-    rows: int = 10,
-    max_retries: int = 3,
-    merchant_check: bool = True,  # ignorado en Bybit, solo para compatibilidad de firma
-) -> List[P2PAd]:
-    pay_types = pay_types or []
-    side      = "1" if trade_type == "BUY" else "0"
-    cache_key = f"bybit|{asset}|{fiat}|{trade_type}|{'_'.join(sorted(pay_types))}"
-
-    cached = _cache.get(cache_key)
-    if cached is not None:
-        logger.debug(f"Cache hit: {cache_key}")
-        return cached
-
-    payload = {
-        "tokenId": asset, "currencyId": fiat,
-        "payment": pay_types, "side": side,
-        "size": str(rows), "page": "1", "amount": "",
-    }
-
-    for attempt in range(max_retries):
+def fetch_ads(asset, fiat, trade_type, pay_types=None, rows=10, max_retries=1, merchant_check=True):
+    key, secret = credentials()
+    if not key or not secret:
+        raise RuntimeError(EXCHANGE_NOTE)
+    if trade_type not in ('BUY', 'SELL'):
+        raise ValueError('Lado P2P inválido')
+    side = '1' if trade_type == 'BUY' else '0'
+    # Cache only public advertisements, partitioned by credential fingerprint.
+    fingerprint = hashlib.sha256((key + secret).encode()).hexdigest()
+    cache_key = (fingerprint, asset, fiat, side)
+    items = _cache.get(cache_key)
+    if items is None:
+        body = json.dumps({'tokenId':asset, 'currencyId':fiat, 'side':side, 'page':'1', 'size':'300'}, separators=(',', ':'))
+        timestamp, window = str(int(time.time()*1000)), '5000'
+        signature = hmac.new(secret.encode(), (timestamp+key+window+body).encode(), hashlib.sha256).hexdigest()
+        headers = {'X-BAPI-API-KEY':key, 'X-BAPI-TIMESTAMP':timestamp,
+                   'X-BAPI-RECV-WINDOW':window, 'X-BAPI-SIGN':signature, 'Content-Type':'application/json'}
         try:
-            resp = requests.post(_ENDPOINT, json=payload, headers=_HEADERS, timeout=15)
-            resp.raise_for_status()
-            data  = resp.json()
-            items = (
-                data.get("result", {}).get("items", [])
-                or data.get("data", {}).get("list", [])
-                or []
-            )
-            ads = _parse_ads(items, fiat=fiat, asset=asset, exchange="Bybit")
-            _cache.set(cache_key, ads)
-            logger.info(f"Bybit {trade_type} {asset}/{fiat} payments={pay_types}: {len(ads)} ads")
-            return ads
-        except requests.HTTPError as exc:
-            status = exc.response.status_code if exc.response is not None else "?"
-            logger.warning(f"Bybit HTTP {status} (attempt {attempt+1}): {exc}")
-        except requests.RequestException as exc:
-            logger.warning(f"Bybit request error (attempt {attempt+1}): {exc}")
-
-        if attempt < max_retries - 1:
-            time.sleep(2 ** attempt)
-
-    logger.error(f"Bybit: all {max_retries} attempts failed for {cache_key}")
-    return []
-
-
-def is_supported() -> bool:
-    return True
+            response = requests.post(_ENDPOINT, data=body, headers=headers, timeout=(4,12))
+            if response.status_code == 403:
+                raise RuntimeError('Bybit HTTP 403: acceso rechazado desde este servidor. Una clave no elimina restricciones de alojamiento.')
+            response.raise_for_status()
+            data = response.json()
+        except requests.RequestException:
+            raise RuntimeError('Bybit: error de red o HTTP; consulta no disponible.') from None
+        except ValueError:
+            raise RuntimeError('Bybit: respuesta no válida.') from None
+        if not isinstance(data, dict) or str(data.get('retCode')) != '0':
+            code = data.get('retCode') if isinstance(data, dict) else None
+            reason = {10003:'clave o entorno incorrecto',10004:'firma no válida',10005:'sin permisos P2P',10002:'hora de servidor fuera de ventana',10010:'IP no autorizada'}.get(code,'consulta rechazada; revisa permisos de anunciante')
+            raise RuntimeError('Bybit: ' + reason)
+        items = data.get('result', {}).get('items')
+        if not isinstance(items, list):
+            raise RuntimeError('Bybit: lista de anuncios inválida.')
+        _cache.set(cache_key, items)
+    ads = _parse_ads(items, fiat, asset)
+    allowed = set(map(str, pay_types or []))
+    ads = [a for a in ads if a.trade_type == trade_type and
+           (not allowed or allowed.intersection(a.payment_methods)) and
+           (not merchant_check or set(a.raw_data.get('authTag', [])).intersection({'VA','BA'}))]
+    ads.sort(key=lambda a:a.price, reverse=trade_type=='SELL')
+    return ads[:rows]

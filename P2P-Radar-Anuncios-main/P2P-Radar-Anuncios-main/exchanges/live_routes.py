@@ -48,20 +48,21 @@ def fetch_bitso(base, quote, fee):
                   timestamp, url + '?book=' + book, fee)
 
 
-def fetch_spot(venue, fee):
+def fetch_spot(venue, fee, base="BTC"):
+    symbol = base + "USDT"
     if venue == 'Binance':
         url = 'https://data-api.binance.vision/api/v3/depth'
-        data = _request('GET', url, params={'symbol': 'BTCUSDT', 'limit': 100})
+        data = _request('GET', url, params={'symbol': symbol, 'limit': 100})
         # Binance depth has no source timestamp: timestamp denotes receipt.
-        return market(venue, 'BTC', 'USDT', data['asks'], data['bids'],
-                      time.time(), url + '?symbol=BTCUSDT&limit=100', fee)
+        return market(venue, base, 'USDT', data['asks'], data['bids'],
+                      time.time(), url + '?symbol=' + symbol + '&limit=100', fee)
     url = 'https://api.bybit.com/v5/market/orderbook'
-    data = _request('GET', url, params={'category': 'spot', 'symbol': 'BTCUSDT', 'limit': 50})
+    data = _request('GET', url, params={'category': 'spot', 'symbol': symbol, 'limit': 50})
     if data.get('retCode') != 0:
         raise ValueError('Bybit rechazó la consulta')
     data = data['result']
-    return market('Bybit', 'BTC', 'USDT', data['a'], data['b'],
-                  float(data['ts']) / 1000, url + '?category=spot&symbol=BTCUSDT', fee)
+    return market('Bybit', base, 'USDT', data['a'], data['b'],
+                  float(data['ts']) / 1000, url + '?category=spot&symbol=' + symbol, fee)
 
 
 def parse_binance_ads(items, side, fee, allowed_methods, timestamp):
@@ -101,11 +102,14 @@ def fetch_p2p(side, fee, allowed_methods):
     return parse_binance_ads(data['data'], side, fee, allowed_methods, time.time())
 
 
-def collect(fees, methods, include_p2p=True):
-    jobs = [('Bitso USDT/COP', lambda: fetch_bitso('USDT', 'COP', fees['Bitso'])),
-            ('Bitso BTC/USDT', lambda: fetch_bitso('BTC', 'USDT', fees['Bitso'])),
-            ('Binance BTC/USDT', lambda: fetch_spot('Binance', fees['Binance'])),
-            ('Bybit BTC/USDT', lambda: fetch_spot('Bybit', fees['Bybit']))]
+def collect(fees, methods, include_p2p=True, assets=('BTC',)):
+    jobs = [('Bitso USDT/COP', lambda: fetch_bitso('USDT', 'COP', fees['Bitso']))]
+    for base in dict.fromkeys(assets):
+        if base not in ('BTC', 'ETH', 'SOL', 'USDC'):
+            raise ValueError('Cripto no soportada')
+        jobs.append((f'Bitso {base}/USDT', lambda base=base: fetch_bitso(base, 'USDT', fees['Bitso'])))
+        for venue in ('Binance', 'Bybit'):
+            jobs.append((f'{venue} {base}/USDT', lambda venue=venue, base=base: fetch_spot(venue, fees[venue], base)))
     if include_p2p and methods:
         for side in ('BUY', 'SELL'):
             jobs.append((f'Binance P2P {side}', lambda side=side: fetch_p2p(side, fees['Binance P2P'], methods)))
