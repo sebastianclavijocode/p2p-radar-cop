@@ -582,48 +582,58 @@ def main() -> None:
         buy_min_cop  = r.ref_buy_ad.min_amount
         sell_min_cop = r.ref_sell_ad.min_amount
 
-        # Capital operable = mínimo de los dos máximos (el cuello de botella)
+        # Capital operable = mínimo de los dos máximos (cuello de botella)
         capital_operable_cop = min(buy_max_cop, sell_max_cop)
-        # Pero también respetamos el mínimo más alto (ambos deben aceptar el monto)
         capital_minimo_cop   = max(buy_min_cop, sell_min_cop)
 
-        # Verificar que el capital configurado entra en los límites
+        # Verificar compatibilidad taker-taker pura
+        # Para operar ambos lados necesitás un monto que entre en ambos rangos
+        taker_taker_posible = capital_minimo_cop <= capital_operable_cop
         buy_ok  = buy_min_cop  <= capital_cop_taker <= buy_max_cop
         sell_ok = sell_min_cop <= capital_cop_taker <= sell_max_cop
 
-        # Calcular con capital operable real (liquidez)
-        cantidad_usdt_real  = capital_operable_cop / taker_buy
-        ganancia_real_cop   = (taker_sell - taker_buy) * cantidad_usdt_real - (TAKER_FEE_USDT * taker_sell)
+        # Calcular con capital operable real
+        cantidad_usdt_real  = capital_operable_cop / taker_buy if capital_operable_cop > 0 else 0
+        ganancia_real_cop   = (taker_sell - taker_buy) * cantidad_usdt_real - (TAKER_FEE_USDT * taker_sell) if cantidad_usdt_real > 0 else 0
 
-        # Calcular con capital configurado (para mostrar al usuario)
+        # Calcular con capital configurado
         cantidad_usdt_cfg   = capital_cop_taker / taker_buy
         ganancia_cfg_cop    = (taker_sell - taker_buy) * cantidad_usdt_cfg - (TAKER_FEE_USDT * taker_sell)
 
-        ganancia_pct        = (taker_sell - taker_buy) / taker_buy * 100
+        ganancia_pct = (taker_sell - taker_buy) / taker_buy * 100
+
+        # Oportunidad híbrida Taker-Maker:
+        # Si el precio taker de compra es más barato que el mejor precio maker,
+        # podría convenir comprar taker y vender como maker
+        maker_sell_price = r.sell_price_effective or taker_sell
+        maker_fee_pct    = BINANCE_MAKER_FEES.get(r.fiat, {}).get("verified" if is_verified else "non_verified", 0.25) / 100
+        hibrido_pct      = (maker_sell_price - taker_buy) / taker_buy * 100 - (maker_fee_pct * 100) - (TAKER_FEE_USDT * taker_buy / capital_cop_taker * 100)
+        hibrido_posible  = hibrido_pct > 0
 
         if ganancia_pct >= max(min_net, 0.0):
             taker_ops.append({
-                "method_human":         r.method_human,
-                "fiat":                 r.fiat,
-                "asset":                r.asset,
-                "taker_buy":            taker_buy,
-                "taker_sell":           taker_sell,
-                "ganancia_pct":         ganancia_pct,
-                # Con capital configurado
-                "cantidad_usdt":        cantidad_usdt_cfg,
-                "ganancia_cop":         ganancia_cfg_cop,
-                "capital":              capital_cop_taker,
-                # Con liquidez real
-                "capital_operable_cop": capital_operable_cop,
-                "capital_minimo_cop":   capital_minimo_cop,
-                "cantidad_usdt_real":   cantidad_usdt_real,
-                "ganancia_real_cop":    ganancia_real_cop,
-                # Límites
-                "dentro_limites":       buy_ok and sell_ok,
-                "buy_min":              buy_min_cop,
-                "buy_max":              buy_max_cop,
-                "sell_min":             sell_min_cop,
-                "sell_max":             sell_max_cop,
+                "method_human":          r.method_human,
+                "fiat":                  r.fiat,
+                "asset":                 r.asset,
+                "taker_buy":             taker_buy,
+                "taker_sell":            taker_sell,
+                "ganancia_pct":          ganancia_pct,
+                "cantidad_usdt":         cantidad_usdt_cfg,
+                "ganancia_cop":          ganancia_cfg_cop,
+                "capital":               capital_cop_taker,
+                "capital_operable_cop":  capital_operable_cop,
+                "capital_minimo_cop":    capital_minimo_cop,
+                "cantidad_usdt_real":    cantidad_usdt_real,
+                "ganancia_real_cop":     ganancia_real_cop,
+                "taker_taker_posible":   taker_taker_posible,
+                "dentro_limites":        buy_ok and sell_ok,
+                "buy_min":               buy_min_cop,
+                "buy_max":               buy_max_cop,
+                "sell_min":              sell_min_cop,
+                "sell_max":              sell_max_cop,
+                "hibrido_posible":       hibrido_posible,
+                "hibrido_pct":           hibrido_pct,
+                "maker_sell_price":      maker_sell_price,
             })
 
     if taker_ops:
