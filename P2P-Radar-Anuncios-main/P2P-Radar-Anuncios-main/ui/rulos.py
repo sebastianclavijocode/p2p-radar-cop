@@ -59,7 +59,7 @@ def render():
 
     with st.expander('1 · Configurar transferencias entre exchanges', expanded=True):
         st.write('1. Busca la dirección que usarás. 2. Escribe la red compatible en ambas cuentas. 3. Completa comisión y mínimo de retiro. 4. Marca Confirmada solo en esa fila.')
-        st.caption('Las filas vacías se ignoran. No marques todas: cada dirección y moneda necesita su propia configuración.')
+        st.caption('Puedes confirmar una fila o todas las completas. El botón solo incluye las monedas seleccionadas y no completa costos por ti.')
         st.caption('Red debe coincidir en retiro y depósito. Confirmada significa que tú revisaste disponibilidad, '
                    'comisión y mínimo hoy; la aplicación no consulta tu cuenta. Sin confirmación no se usa la transferencia.')
         rows = [{'Origen': a, 'Destino': b, 'Activo': asset, 'Red': {'USDT':'Tron (TRC20)', 'BTC':'Bitcoin', 'ETH':'Ethereum', 'SOL':'Solana', 'USDC':'Ethereum (ERC20)'}[asset], 'Comisión en activo': None,
@@ -68,10 +68,39 @@ def render():
         st.info('Redes sugeridas, aún no verificadas en tus cuentas. Confirma que existan en retiro y depósito; completa comisión y mínimo. No se supone costo cero.')
         st.markdown('[Redes publicadas por Bitso](https://support.bitso.com/hc/en-us/articles/4419901801748-Which-network-to-use-to-deposit-or-withdraw-crypto-on-Bitso) · Verifica también el otro exchange.')
         transfer_frame = pd.DataFrame(rows).astype({'Comisión en activo': 'float64', 'Mínimo de retiro':'float64'})
+        transfer_frame = st.session_state.get('rulo-transfer-base', transfer_frame)
+        revision = st.session_state.get('rulo-transfer-revision', 0)
+        editor_key = 'rulo-transfers-v2' if revision == 0 else f'rulo-transfers-bulk-{revision}'
         config = st.data_editor(transfer_frame, hide_index=True, width='stretch',
-            disabled=['Origen', 'Destino', 'Activo'], key='rulo-transfers-v2',
+            disabled=['Origen', 'Destino', 'Activo'], key=editor_key,
             column_config={'Red': st.column_config.TextColumn(help='Nombre de la misma red en retiro y depósito. No es el nombre del exchange.'), 'Confirmada': st.column_config.CheckboxColumn(help='Marca después de completar red, comisión y mínimo de retiro.'), 'Comisión en activo': st.column_config.NumberColumn(min_value=0.0, format='%.8f'),
                            'Mínimo de retiro': st.column_config.NumberColumn(min_value=0.0, format='%.8f')})
+        confirm_col, clear_col = st.columns(2)
+        confirm_all = confirm_col.button('Confirmar todas', key='rulo-confirm-all',
+            help='Confirma las filas completas de las monedas seleccionadas. Al pulsar declaras que revisaste sus redes y costos.')
+        clear_all = clear_col.button('Desmarcar todas', key='rulo-clear-all')
+        if confirm_all or clear_all:
+            updated = config.copy(deep=True)
+            selected = updated['Activo'].isin(['USDT'] + assets)
+            valid = selected.copy()
+            valid &= updated['Red'].fillna('').astype(str).str.strip().str.lower().isin(['', 'none', 'nan']) == False
+            for field in ('Comisión en activo', 'Mínimo de retiro'):
+                values = pd.to_numeric(updated[field], errors='coerce')
+                valid &= values.notna() & values.ge(0) & values.lt(float('inf'))
+            if clear_all:
+                updated['Confirmada'] = False
+                message = 'Se desmarcaron todas las transferencias.'
+            else:
+                updated.loc[selected, 'Confirmada'] = valid[selected]
+                count, pending = int(valid.sum()), int((selected & ~valid).sum())
+                message = f'{count} transferencias confirmadas. {pending} pendientes de red, comisión o mínimo.'
+            st.session_state['rulo-transfer-base'] = updated
+            st.session_state['rulo-transfer-revision'] = revision + 1
+            st.session_state['rulo-transfer-message'] = message
+            st.rerun()
+        if 'rulo-transfer-message' in st.session_state:
+            st.info(st.session_state.pop('rulo-transfer-message'))
+        st.caption('Para calcular también debes marcar «Confirmé mis comisiones y otros costos» en la barra lateral.')
         st.caption('La configuración se conserva durante esta sesión. No se envía dinero ni se guardan claves de exchanges.')
 
     transfers, errors = [], []
