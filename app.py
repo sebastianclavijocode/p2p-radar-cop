@@ -1,0 +1,1749 @@
+"""
+P2P Spread Radar — Bot de Alertas
+===================================
+Ejecutar: streamlit run app.py
+"""
+import json
+import logging
+import sys
+import traceback
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+import pandas as pd
+import streamlit as st
+import streamlit.components.v1 as components
+
+sys.path.insert(0, ".")
+
+from core.custom_methods import add_custom_method, load_custom_methods, save_custom_methods
+from core.mapping import DEFAULT_MAPPINGS, load_mappings, save_mappings
+from core.models import METHODS_CATALOG, SpreadResult
+from core.scanner import scan_all_methods
+from core.spread import analyze_opportunity
+from ui.cards import build_alerts_html, build_dashboard_html, build_feed_html, build_hero_html, build_kpi_html, build_telegram_html, build_taker_cards_html
+from ui.styles import GLASS_CSS
+from ui.table import render_chart, render_discarded_table, render_ok_table
+
+import exchanges.binance as binance_ex
+import exchanges.bybit   as bybit_ex
+import exchanges.bingx   as bingx_ex
+
+# ── logging ───────────────────────────────────────────────────────────────────
+log_records: List[str] = []
+
+class _UIHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        log_records.append(self.format(record))
+        if len(log_records) > 200:
+            log_records.pop(0)
+
+_root = logging.getLogger()
+_root.setLevel(logging.DEBUG)
+if not any(isinstance(h, _UIHandler) for h in _root.handlers):
+    _h = _UIHandler()
+    _h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", "%H:%M:%S"))
+    _root.addHandler(_h)
+
+logger = logging.getLogger("app")
+
+EXCHANGES = {"Binance": binance_ex, "Bybit": bybit_ex, "BingX": bingx_ex}
+
+# Comisiones maker de Binance P2P por fiat (verificado / no verificado)
+BINANCE_MAKER_FEES: Dict[str, Dict[str, float]] = {
+    "USD": {"verified": 0.28, "non_verified": 0.35},
+    "ARS": {"verified": 0.16, "non_verified": 0.20},
+    "EUR": {"verified": 0.0,  "non_verified": 0.0},
+    "UYU": {"verified": 0.16, "non_verified": 0.20},
+    "COP": {"verified": 0.25, "non_verified": 0.25},
+}
+
+DEFAULT_CAPITAL: Dict[str, Dict] = {
+    "ARS": {"target_min": 180_000, "target_max": 1_800_000, "simulado": 500_000},
+    "USD": {"target_min": 200,     "target_max": 2_000,     "simulado": 500},
+    "EUR": {"target_min": 200,     "target_max": 2_000,     "simulado": 500},
+    "UYU": {"target_min": 8_000,   "target_max": 80_000,    "simulado": 20_000},
+    "COP": {"target_min": 800_000, "target_max": 8_000_000, "simulado": 2_000_000},
+}
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+def _pct(v, d=4): return "—" if v is None else f"{v:.{d}f}%"
+def _fmt(v, s="", d=2): return "—" if v is None else f"{v:,.{d}f}{(' '+s) if s else ''}"
+
+def _section(icon: str, title: str) -> None:
+    st.markdown(
+        f"<div style='display:flex;align-items:center;gap:10px;margin:24px 0 10px;'>"
+        f"<span style='font-size:15px;'>{icon}</span>"
+        f"<span style='font-size:13px;font-weight:600;color:rgba(255,255,255,.85);"
+        f"letter-spacing:0.1px;'>{title}</span>"
+        f"<div style='flex:1;height:1px;background:rgba(255,255,255,0.06);margin-left:6px;'></div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+
+# ── query engine ──────────────────────────────────────────────────────────────
+def run_queries(
+    exchange_name, asset, mappings,
+    is_verified: bool,
+    publication_mode, epsilon_fiat, epsilon_pct,
+    fee_slippage_pct: float,
+    exclude_ads, ad_threshold_pct,
+    capital_cfg, buffer_pct,
+    min_net_profit_pct, allow_outside_target, top_n,
+    extra_methods: List[dict] = [],
+    merchant_check: bool = True,
+) -> List[SpreadResult]:
+    exchange_mod = EXCHANGES[exchange_name]
+    ex_key = exchange_name.lower()
+    results: List[SpreadResult] = []
+    catalog = METHODS_CATALOG + extra_methods
+
+    for method in catalog:
+        mid, mname, fiat = method["id"], method["human_name"], method["fiat"]
+        # Custom methods carry their payment_id directly — validate exchange and auto-build mapping config
+        if "_payment_id" in method:
+            method_exchange = method.get("_exchange", "Binance")
+            if method_exchange.lower() != ex_key:
+                results.append(_stub(
+                    "NOT_AVAILABLE",
+                    f"Método configurado para {method_exchange}, no para {exchange_name}. "
+                    f"Cambiá el exchange o agregá el método desde {method_exchange}."
+                ))
+                continue
+            # Siempre usar _payment_id para métodos custom, sin importar si el ID está en mappings
+            method_cfg = {"payment_ids": [method["_payment_id"]], "available": True}
+        else:
+            method_cfg = mappings.get(ex_key, {}).get(mid, {})
+
+        def _stub(status, msg, _mid=mid, _mname=mname, _fiat=fiat):
+            return SpreadResult(
+                exchange=exchange_name, method_id=_mid, method_human=_mname,
+                method_mapped="—", fiat=_fiat, asset=asset,
+                buy_price_effective=None, sell_price_effective=None,
+                spread_gross_pct=None, net_profit_pct=None,
+                capital_min_fiat=None, capital_max_fiat=None,
+                capital_recommended_fiat=None, capital_recommended_usdt=None,
+                ref_buy_ad=None, ref_sell_ad=None,
+                buy_ads_count=0, sell_ads_count=0,
+                buy_ads_skipped=0, sell_ads_skipped=0,
+                status=status, error_msg=msg,
+                ref_buy_ad_label="—", ref_sell_ad_label="—",
+            )
+
+        if not method_cfg:
+            results.append(_stub("MAPPING_REQUIRED", "Sin configuración de mapeo.")); continue
+        if not method_cfg.get("available", False):
+            continue  # método deshabilitado: no aparece en lista ni descartados
+        if not exchange_mod.is_supported():
+            results.append(_stub("NOT_AVAILABLE", exchange_mod.EXCHANGE_NOTE[:120])); continue
+
+        pay_ids       = method_cfg.get("payment_ids", [])
+        method_mapped = ", ".join(pay_ids) if pay_ids else "—"
+
+        try:
+            buy_ads  = exchange_mod.fetch_ads(asset=asset, fiat=fiat, trade_type="BUY",  pay_types=pay_ids, rows=top_n, merchant_check=merchant_check)
+            sell_ads = exchange_mod.fetch_ads(asset=asset, fiat=fiat, trade_type="SELL", pay_types=pay_ids, rows=top_n, merchant_check=merchant_check)
+        except Exception as exc:
+            logger.error(f"{exchange_name} [{mid}]: {exc}\n{traceback.format_exc()}")
+            results.append(_stub("ERROR", str(exc)[:120])); continue
+
+        cap_cfg = capital_cfg.get(fiat, DEFAULT_CAPITAL.get(fiat, {"target_min": 200, "target_max": 2000, "simulado": 500}))
+        if exchange_name == "Binance":
+            fee_fiat_cfg = BINANCE_MAKER_FEES.get(fiat, {"verified": 0.0, "non_verified": 0.0})
+            fee_exchange_pct = fee_fiat_cfg["verified"] if is_verified else fee_fiat_cfg["non_verified"]
+        else:
+            fee_exchange_pct = 0.0
+
+        result = analyze_opportunity(
+            buy_ads=buy_ads, sell_ads=sell_ads,
+            exchange=exchange_name, method_id=mid, method_human=mname,
+            method_mapped=method_mapped, fiat=fiat, asset=asset,
+            fee_exchange_pct=fee_exchange_pct, fee_slippage_pct=fee_slippage_pct,
+            fee_method_pct=0.0,
+            fee_method_fixed=0.0,
+            publication_mode=publication_mode,
+            epsilon_fiat=epsilon_fiat, epsilon_pct=epsilon_pct,
+            exclude_ads=exclude_ads, ad_threshold_pct=ad_threshold_pct,
+            capital_target_min=cap_cfg["target_min"],
+            capital_target_max=cap_cfg["target_max"],
+            capital_simulado=cap_cfg["simulado"],
+            buffer_pct=buffer_pct,
+            min_net_profit_pct=min_net_profit_pct,
+            allow_outside_target=allow_outside_target,
+        )
+        results.append(result)
+
+    ok     = sorted([r for r in results if r.status == "OK"],
+                    key=lambda r: r.net_profit_pct or -9999, reverse=True)
+    others = [r for r in results if r.status != "OK"]
+    return ok + others
+
+
+# ── sidebar panels ────────────────────────────────────────────────────────────
+def _mapping_panel(exchange_name: str, mappings: Dict, custom_methods: List[dict] = []) -> None:
+    ex_key = exchange_name.lower()
+    ex_cfg = mappings.get(ex_key, {})
+    with st.expander("Métodos de pago configurados", expanded=False):
+        st.caption(
+            "Estos son los metodos de pago que el radar monitorea. "
+            "Para agregar nuevos, usá la pestaña Diagnóstico → Descubrir métodos."
+        )
+        catalog_rows = [{
+            "Metodo": m["human_name"], "Fiat": m["fiat"],
+            "Activo": "Si",
+            "ID en Binance": ", ".join(ex_cfg.get(m["id"], {}).get("payment_ids", [])) or "--",
+        } for m in METHODS_CATALOG if ex_cfg.get(m["id"], {}).get("available", False)]
+        custom_rows = [{
+            "Metodo": m["human_name"], "Fiat": m["fiat"],
+            "Activo": "Si",
+            "ID en Binance": m["_payment_id"],
+        } for m in custom_methods]
+        from ui.table import _html_table
+        st.markdown(_html_table(catalog_rows + custom_rows), unsafe_allow_html=True)
+
+
+
+def _capital_panel() -> Dict:
+    """Capital simplificado: el usuario ingresa cuanto quiere invertir por moneda."""
+    caps = st.session_state.get("capital_cfg", json.loads(json.dumps(DEFAULT_CAPITAL)))
+    with st.expander("Capital a invertir por moneda", expanded=False):
+        st.caption(
+            "Cuanto capital tenes disponible para operar en cada moneda. "
+            "Se usa para calcular cuantos USDT podrias comprar/vender en cada operacion."
+        )
+        for fiat, defs in DEFAULT_CAPITAL.items():
+            cur = caps.get(fiat, defs)
+            simulado = st.number_input(
+                f"Capital en {fiat}",
+                min_value=0.0,
+                value=float(cur["simulado"]),
+                step=100.0,
+                key=f"csim_{fiat}",
+                help=f"Cuanto {fiat} tenes para operar. El radar calcula la ganancia sobre este monto.",
+            )
+            caps[fiat] = {
+                "target_min": simulado,
+                "target_max": simulado,
+                "simulado":   simulado,
+            }
+
+    # ── Capital Taker-Taker COP ───────────────────────────────────────────────
+    with st.expander("💱 Capital Taker-Taker (COP)", expanded=False):
+        st.caption(
+            "Capital específico para operaciones sin anuncio (compra y venta directa). "
+            "También definí los límites mínimo y máximo para filtrar anuncios compatibles."
+        )
+        taker_cfg = st.session_state.get("taker_cfg", {
+            "capital":  2_000_000,
+            "lim_min":  800_000,
+            "lim_max":  10_000_000,
+        })
+        t_cap = st.number_input(
+            "Capital a usar (COP)",
+            min_value=0.0,
+            value=float(taker_cfg["capital"]),
+            step=100_000.0,
+            key="taker_capital",
+            help="Cuántos COP querés usar en cada operación taker-taker.",
+        )
+        col_min, col_max = st.columns(2)
+        t_min = col_min.number_input(
+            "Límite mínimo (COP)",
+            min_value=0.0,
+            value=float(taker_cfg["lim_min"]),
+            step=100_000.0,
+            key="taker_lim_min",
+            help="El anuncio debe aceptar al menos este monto.",
+        )
+        t_max = col_max.number_input(
+            "Límite máximo (COP)",
+            min_value=0.0,
+            value=float(taker_cfg["lim_max"]),
+            step=500_000.0,
+            key="taker_lim_max",
+            help="El anuncio debe aceptar hasta este monto.",
+        )
+        taker_cfg = {"capital": t_cap, "lim_min": t_min, "lim_max": t_max}
+        st.session_state["taker_cfg"] = taker_cfg
+
+    st.session_state["capital_cfg"] = caps
+    return caps
+
+
+# ── KPI row ───────────────────────────────────────────────────────────────────
+def _render_kpis(ok_count, best_net, best_cap, best_cap_fiat, best_cap_usdt, best_ars_cap, last_upd) -> None:
+    if best_cap_usdt is not None:
+        cap_str = f"~{best_cap_usdt:,.0f} USDT"
+    elif best_cap is not None:
+        cap_str = f"{best_cap:,.0f} {best_cap_fiat}"
+    else:
+        cap_str = "—"
+    upd_s = last_upd.strftime("%H:%M:%S") if last_upd else "—"
+    html = build_hero_html(ok_count, best_net, cap_str, upd_s)
+    components.html(html, height=168, scrolling=False)
+
+
+# ── main ──────────────────────────────────────────────────────────────────────
+def main() -> None:
+    st.set_page_config(
+        page_title="P2P Spread Radar · Bot de Alertas",
+        page_icon="🤖", layout="wide",
+        initial_sidebar_state="expanded",
+    )
+    st.markdown(GLASS_CSS, unsafe_allow_html=True)
+
+    for k, v in [
+        ("results",         []),
+        ("last_update",     None),
+        ("last_exchange",   None),
+        ("mappings",        load_mappings()),
+        ("capital_cfg",     json.loads(json.dumps(DEFAULT_CAPITAL))),
+        ("custom_methods",  load_custom_methods()),
+    ]:
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+    # ── SIDEBAR ───────────────────────────────────────────────────────────────
+    with st.sidebar:
+        st.markdown(
+            "<link rel='stylesheet' href='https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css'>"
+            "<style>"
+            ".p2p-brand { margin-bottom: 2px; }"
+            ".p2p-brand-name { font-size:20px; font-weight:900; color:#fff; letter-spacing:-0.5px; }"
+            ".p2p-brand-dot  { color:#00d68f; }"
+            ".p2p-sub { font-size:11.5px; color:rgba(255,255,255,0.38); margin-top:5px; display:flex; align-items:center; gap:6px; }"
+            ".p2p-mode { background:rgba(0,214,143,0.09); border:1px solid rgba(0,214,143,0.22); color:#00d68f;"
+            "  font-size:9.5px; font-weight:700; text-transform:uppercase; letter-spacing:1.2px;"
+            "  padding:2px 8px; border-radius:20px; }"
+            ".p2p-help { display:inline-flex; align-items:center; justify-content:center;"
+            "  width:15px; height:15px; border-radius:50%;"
+            "  background:transparent; border:1px solid rgba(255,193,7,0.4);"
+            "  color:#FFC107; font-size:9px; font-weight:700; cursor:default;"
+            "  position:relative; font-style:normal; }"
+            ".p2p-help:hover .p2p-tooltip { display:block; }"
+            ".p2p-tooltip { display:none; position:absolute; left:20px; top:-10px; width:220px;"
+            "  background:#1a2035; border:1px solid rgba(255,255,255,0.1); border-radius:10px;"
+            "  padding:10px 12px; font-size:11px; color:rgba(255,255,255,0.7); line-height:1.6;"
+            "  z-index:999; box-shadow:0 8px 24px rgba(0,0,0,0.5); pointer-events:none; }"
+            ".p2p-dev { font-size:10.5px; color:rgba(255,255,255,0.3); margin-top:10px; }"
+            ".p2p-dev span { color:#00d68f; font-weight:700; }"
+            ".p2p-divider { height:1px; background:rgba(255,255,255,0.05); margin:14px 0; }"
+            "</style>"
+            "<div class='p2p-brand'>"
+            "  <div class='p2p-brand-name'>P2P Radar<span class='p2p-brand-dot'>.</span></div>"
+            "  <div class='p2p-sub'>"
+            "    Binance P2P"
+            "    <span class='p2p-mode'>Yo Publico</span>"
+            "    <i class='p2p-help' style='font-family:inherit'>"
+            "      ?"
+            "      <span class='p2p-tooltip'>"
+            "        <b style='color:#fff'>Modo Yo Publico</b><br>"
+            "        Publicás tus propios anuncios en Binance P2P compitiendo con el top del libro."
+            "        Vendés USDT en tab Comprar al precio más alto y recomprás en tab Vender al más bajo."
+            "        La ganancia es la diferencia menos comisiones."
+            "      </span>"
+            "    </i>"
+            "  </div>"
+            "</div>"
+            "<div class='p2p-divider'></div>"
+            "<div class='p2p-dev'>Desarrollado por <span>Ezequiel Sack</span></div>"
+            "<div style='display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;'>"
+            "<a href='https://t.me/EzequielSackTelegram' target='_blank' title='Telegram' style='display:flex;align-items:center;justify-content:center;"
+            "width:32px;height:32px;border-radius:8px;background:rgba(41,182,246,0.12);"
+            "border:1px solid rgba(41,182,246,0.25);color:#29B6F6;font-size:15px;text-decoration:none;'>"
+            "<i class='fab fa-telegram'></i></a>"
+            "<a href='https://www.instagram.com/ezequielsack/' target='_blank' title='Instagram' style='display:flex;align-items:center;justify-content:center;"
+            "width:32px;height:32px;border-radius:8px;background:rgba(225,48,108,0.1);"
+            "border:1px solid rgba(225,48,108,0.22);color:#E1306C;font-size:15px;text-decoration:none;'>"
+            "<i class='fab fa-instagram'></i></a>"
+            "<a href='https://www.threads.com/@ezequielsack?hl=es-la' target='_blank' title='Threads' style='display:flex;align-items:center;justify-content:center;"
+            "width:32px;height:32px;border-radius:8px;background:rgba(255,255,255,0.06);"
+            "border:1px solid rgba(255,255,255,0.15);color:rgba(255,255,255,0.75);font-size:15px;text-decoration:none;'>"
+            "<i class='fab fa-threads'></i></a>"
+            "<a href='https://open.spotify.com/show/4OqJ0tFSyxbQl2tRHLoby3?si=fe132beadedc4710' target='_blank' title='Spotify' style='display:flex;align-items:center;justify-content:center;"
+            "width:32px;height:32px;border-radius:8px;background:rgba(29,185,84,0.1);"
+            "border:1px solid rgba(29,185,84,0.22);color:#1DB954;font-size:15px;text-decoration:none;'>"
+            "<i class='fab fa-spotify'></i></a>"
+            "<a href='https://www.linkedin.com/in/ezequiel-sack-28154a17b/' target='_blank' title='LinkedIn' style='display:flex;align-items:center;justify-content:center;"
+            "width:32px;height:32px;border-radius:8px;background:rgba(10,102,194,0.12);"
+            "border:1px solid rgba(10,102,194,0.28);color:#0A66C2;font-size:15px;text-decoration:none;'>"
+            "<i class='fab fa-linkedin'></i></a>"
+            "<a href='https://twitter.com/EzequielSack' target='_blank' title='X / Twitter' style='display:flex;align-items:center;justify-content:center;"
+            "width:32px;height:32px;border-radius:8px;background:rgba(255,255,255,0.06);"
+            "border:1px solid rgba(255,255,255,0.15);color:rgba(255,255,255,0.8);font-size:15px;text-decoration:none;'>"
+            "<i class='fab fa-x-twitter'></i></a>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        st.divider()
+
+        with st.expander("Exchange", expanded=True):
+            exchange_name = st.selectbox("Exchange",
+                ["Binance", "Bybit"],
+                help="El exchange donde se buscan los anuncios P2P. BingX no tiene API pública y no está soportado.",
+                label_visibility="collapsed")
+        with st.expander("Cripto", expanded=True):
+            asset = st.selectbox("Cripto",
+                ["USDT"],
+                help="La criptomoneda que se compra y vende. USDT es la más común en P2P.",
+                label_visibility="collapsed")
+
+        st.divider()
+        prev_merchant = st.session_state.get("_prev_merchant_check", True)
+        with st.expander("Filtros de oportunidad", expanded=True):
+            min_net = st.number_input("Ganancia minima (%)", -50.0, 50.0, 0.0, 0.05, "%.2f",
+                help="Solo muestra oportunidades con esta ganancia neta o más. "
+                     "0% = muestra todo. 1% = solo oportunidades con al menos 1% de ganancia después de fees.")
+            allow_out = st.toggle("Ignorar límite de capital",
+                value=True,
+                help="Si está activado, muestra oportunidades aunque el capital recomendado quede fuera del rango objetivo.")
+
+        with st.expander("Consulta al mercado", expanded=True):
+            top_n = st.slider("Anuncios a analizar", 3, 20, 10,
+                help="Cuántos anuncios del mercado se analizan por lado (compra y venta). "
+                     "Más anuncios = más preciso pero más lento.")
+        buf_pct = 1.0
+
+        with st.expander("Filtro de anuncios", expanded=True):
+            merchant_check = st.toggle("Solo comerciantes verificados",
+                value=True,
+                help="Activado: muestra solo anuncios de comerciantes verificados (Pro Merchants de Binance) "
+                     "y aplica comisión maker reducida. "
+                     "Desactivado: incluye todos y aplica comisión estándar.")
+            excl_ads = st.toggle("Excluir anuncios pagos",
+                value=True,
+                help="Algunos anuncios son publicidad pagada con precios fuera del mercado real. "
+                     "Activar para ignorarlos y usar solo el precio real del mercado.")
+        if merchant_check != prev_merchant:
+            st.warning("⚠️ Presioná **Actualizar** para aplicar el cambio.")
+        st.session_state["_prev_merchant_check"] = merchant_check
+        ad_thresh = 999.0
+
+        with st.expander("Estrategia de publicación", expanded=True):
+            beat_top = st.toggle(
+                "Beat top (superar al primero)",
+                value=False,
+                help="Activado: publicás ligeramente mejor que el top del libro para quedar primero en la cola. "
+                     "Desactivado: publicás al mismo precio que el top (match_top).",
+            )
+            pub_mode = "beat_top" if beat_top else "match_top"
+            eps_fiat = 0.0
+            eps_pct  = st.number_input(
+                "Epsilon (%)",
+                min_value=0.0, max_value=1.0, value=0.05, step=0.01, format="%.2f",
+                help="Cuánto mejorar el precio del top para ganar prioridad. Solo se usa en modo beat_top.",
+                disabled=not beat_top,
+            ) if beat_top else 0.0
+            fee_slippage_pct = st.number_input(
+                "Slippage (%)",
+                min_value=0.0, max_value=2.0, value=0.0, step=0.05, format="%.2f",
+                help="Coste estimado de deslizamiento por ejecución parcial o demoras. "
+                     "0% = sin slippage. Se descuenta del net profit.",
+            )
+
+        # is_verified se deriva de merchant_check:
+        # si filtrás solo verificados → vos también sos verificado → comisión reducida
+        # si incluís no verificados → comisión de no verificado
+        is_verified = merchant_check
+
+        st.divider()
+        if exchange_name == "Binance":
+            with st.expander("💸 Comisión maker por divisa", expanded=False):
+                st.caption("Editá los valores según tu nivel en Binance.")
+                if "maker_fees" not in st.session_state:
+                    st.session_state["maker_fees"] = {
+                        fk: (fv["verified"] if is_verified else fv["non_verified"])
+                        for fk, fv in BINANCE_MAKER_FEES.items()
+                    }
+                for fk in BINANCE_MAKER_FEES:
+                    col_fiat, col_val = st.columns([1, 1])
+                    col_fiat.markdown(
+                        f'<div style="font-size:12px;font-weight:700;color:rgba(255,255,255,0.65);'
+                        f'text-transform:uppercase;letter-spacing:0.8px;padding-top:8px;">{fk}</div>',
+                        unsafe_allow_html=True
+                    )
+                    new_val = col_val.number_input(
+                        f"fee_{fk}", min_value=0.0, max_value=5.0,
+                        value=float(st.session_state["maker_fees"].get(fk, BINANCE_MAKER_FEES[fk]["verified"])),
+                        step=0.01, format="%.2f",
+                        label_visibility="collapsed", key=f"fee_input_{fk}"
+                    )
+                    st.session_state["maker_fees"][fk] = new_val
+                    BINANCE_MAKER_FEES[fk]["verified"]     = new_val
+                    BINANCE_MAKER_FEES[fk]["non_verified"] = new_val
+        else:
+            st.caption("Sin comisión (0%)")
+
+        st.divider()
+        caps = _capital_panel()
+        _mapping_panel(exchange_name, st.session_state["mappings"], st.session_state.get("custom_methods", []))
+        st.divider()
+
+        # Auto-refresh
+        import time as _time
+        auto_refresh_opts = {"Desactivado": 0, "30 seg": 30, "1 min": 60, "2 min": 120, "5 min": 300}
+        auto_refresh_sel  = st.selectbox(
+            "🔄 Auto-actualizar cada",
+            list(auto_refresh_opts.keys()),
+            index=0,
+            key="auto_refresh_sel",
+        )
+        auto_refresh_secs = auto_refresh_opts[auto_refresh_sel]
+
+        if "last_auto_refresh" not in st.session_state:
+            st.session_state["last_auto_refresh"] = 0.0
+        if "auto_refresh_trigger" not in st.session_state:
+            st.session_state["auto_refresh_trigger"] = False
+
+        refresh = st.button("Actualizar ahora", use_container_width=True, type="primary")
+
+        # Limpiar trigger después de usarlo
+        if st.session_state["auto_refresh_trigger"]:
+            st.session_state["auto_refresh_trigger"] = False
+            refresh = True
+
+        # Countdown y disparo
+        if auto_refresh_secs > 0:
+            elapsed   = _time.time() - st.session_state["last_auto_refresh"]
+            restante  = int(auto_refresh_secs - elapsed)
+            if elapsed >= auto_refresh_secs:
+                st.session_state["last_auto_refresh"]    = _time.time()
+                st.session_state["auto_refresh_trigger"] = True
+                st.rerun()
+            else:
+                st.caption(f"⏱️ Próxima actualización en {restante}s")
+                _time.sleep(1)
+                st.rerun()
+
+
+    # ── QUERY ─────────────────────────────────────────────────────────────────
+    if refresh or (
+        st.session_state["last_exchange"] != exchange_name
+        and not st.session_state["results"]
+    ):
+        with st.spinner(f"Consultando {exchange_name} P2P…"):
+            res = run_queries(
+                exchange_name=exchange_name, asset=asset,
+                mappings=st.session_state["mappings"],
+                is_verified=is_verified,
+                publication_mode=pub_mode,
+                epsilon_fiat=eps_fiat, epsilon_pct=eps_pct,
+                fee_slippage_pct=fee_slippage_pct,
+                exclude_ads=excl_ads, ad_threshold_pct=ad_thresh,
+                capital_cfg=caps, buffer_pct=buf_pct,
+                min_net_profit_pct=min_net, allow_outside_target=allow_out,
+                top_n=top_n,
+                extra_methods=st.session_state.get("custom_methods", []),
+                merchant_check=merchant_check,
+            )
+        st.session_state["results"]       = res
+        st.session_state["last_update"]   = datetime.now()
+        st.session_state["last_exchange"] = exchange_name
+
+    results: List[SpreadResult] = st.session_state["results"]
+
+    if not results:
+        st.info("Presioná **Actualizar** en el sidebar para comenzar.")
+        return
+
+    ok_results = [r for r in results if r.status == "OK"]
+    disc_count = len(results) - len(ok_results)
+
+    # ── 1. KPI / HERO (topbar + métricas) ────────────────────────────────────
+    kpi_html = build_kpi_html(
+        results=results,
+        exchange_name=exchange_name,
+        asset=asset,
+        last_upd=st.session_state["last_update"],
+    )
+    components.html(kpi_html, height=290, scrolling=False)
+
+    # ── 2. GRÁFICO DE BARRAS ──────────────────────────────────────────────────
+    st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
+    if ok_results:
+        render_chart(results)
+
+    # ── 3. TAKER-TAKER (tarjetas naranjas) ───────────────────────────────────
+    TAKER_FEE_USDT    = 0.14
+    taker_cfg         = st.session_state.get("taker_cfg", {"capital": 2_000_000, "lim_min": 800_000, "lim_max": 10_000_000})
+    capital_cop_taker = taker_cfg["capital"]
+    taker_ops = []
+    for r in results:
+        if r.fiat != "COP": continue
+        if not r.ref_buy_ad or not r.ref_sell_ad: continue
+        taker_buy  = r.ref_buy_ad.price
+        taker_sell = r.ref_sell_ad.price
+        if taker_sell <= taker_buy: continue
+
+        # Liquidez real — el mínimo entre lo que acepta comprador y vendedor
+        buy_max_cop  = r.ref_buy_ad.max_amount   # máximo que acepta el comprador
+        sell_max_cop = r.ref_sell_ad.max_amount  # máximo que acepta el vendedor
+        buy_min_cop  = r.ref_buy_ad.min_amount
+        sell_min_cop = r.ref_sell_ad.min_amount
+
+        # Capital operable = mínimo de los dos máximos (cuello de botella)
+        capital_operable_cop = min(buy_max_cop, sell_max_cop)
+        capital_minimo_cop   = max(buy_min_cop, sell_min_cop)
+
+        # Verificar compatibilidad taker-taker pura
+        # Para operar ambos lados necesitás un monto que entre en ambos rangos
+        taker_taker_posible = capital_minimo_cop <= capital_operable_cop
+        buy_ok  = buy_min_cop  <= capital_cop_taker <= buy_max_cop
+        sell_ok = sell_min_cop <= capital_cop_taker <= sell_max_cop
+
+        # Calcular con capital operable real
+        cantidad_usdt_real  = capital_operable_cop / taker_buy if capital_operable_cop > 0 else 0
+        ganancia_real_cop   = (taker_sell - taker_buy) * cantidad_usdt_real - (TAKER_FEE_USDT * taker_sell) if cantidad_usdt_real > 0 else 0
+
+        # Calcular con capital configurado
+        cantidad_usdt_cfg   = capital_cop_taker / taker_buy
+        ganancia_cfg_cop    = (taker_sell - taker_buy) * cantidad_usdt_cfg - (TAKER_FEE_USDT * taker_sell)
+
+        ganancia_pct = (taker_sell - taker_buy) / taker_buy * 100
+
+        # Oportunidad híbrida Taker-Maker:
+        # Si el precio taker de compra es más barato que el mejor precio maker,
+        # podría convenir comprar taker y vender como maker
+        maker_sell_price = r.sell_price_effective or taker_sell
+        maker_fee_pct    = BINANCE_MAKER_FEES.get(r.fiat, {}).get("verified" if is_verified else "non_verified", 0.25) / 100
+        hibrido_pct      = (maker_sell_price - taker_buy) / taker_buy * 100 - (maker_fee_pct * 100) - (TAKER_FEE_USDT * taker_buy / capital_cop_taker * 100)
+        hibrido_posible  = hibrido_pct > 0
+
+        if ganancia_pct >= max(min_net, 0.0):
+            taker_ops.append({
+                "method_human":          r.method_human,
+                "fiat":                  r.fiat,
+                "asset":                 r.asset,
+                "taker_buy":             taker_buy,
+                "taker_sell":            taker_sell,
+                "ganancia_pct":          ganancia_pct,
+                "cantidad_usdt":         cantidad_usdt_cfg,
+                "ganancia_cop":          ganancia_cfg_cop,
+                "capital":               capital_cop_taker,
+                "capital_operable_cop":  capital_operable_cop,
+                "capital_minimo_cop":    capital_minimo_cop,
+                "cantidad_usdt_real":    cantidad_usdt_real,
+                "ganancia_real_cop":     ganancia_real_cop,
+                "taker_taker_posible":   taker_taker_posible,
+                "dentro_limites":        buy_ok and sell_ok,
+                "buy_min":               buy_min_cop,
+                "buy_max":               buy_max_cop,
+                "sell_min":              sell_min_cop,
+                "sell_max":              sell_max_cop,
+                "hibrido_posible":       hibrido_posible,
+                "hibrido_pct":           hibrido_pct,
+                "maker_sell_price":      maker_sell_price,
+            })
+
+    if taker_ops:
+        st.markdown(
+            f'<div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;'
+            f'color:rgba(255,140,0,0.8);font-weight:700;margin-bottom:4px;margin-top:8px;">'
+            f'🟠 Oportunidades Taker-Taker (sin anuncio) &nbsp;'
+            f'<span style="background:rgba(255,140,0,0.2);border-radius:10px;padding:2px 8px;">'
+            f'{len(taker_ops)}</span></div>',
+            unsafe_allow_html=True
+        )
+        taker_html = build_taker_cards_html(taker_ops)
+        components.html(taker_html, height=len(taker_ops) * 260 + 30, scrolling=False)
+
+    # ── 4. ALERTAS MAKER-MAKER ────────────────────────────────────────────────
+    alerts_html = build_alerts_html(results)
+    alerts_height = 80 + max(len(ok_results) * 280, 200)
+    components.html(alerts_html, height=alerts_height, scrolling=True)
+
+    # ── VISTAS SECUNDARIAS (tabs debajo del dashboard) ────────────────────────
+    st.markdown("<div style='margin-top:20px'></div>", unsafe_allow_html=True)
+    tab_scan, tab_tg, tab_hold, tab_calc, tab_heat, tab_table, tab_disc, tab_diag = st.tabs([
+        "🔁 Escaneo",
+        "📱 Telegram",
+        "🔵 Hold",
+        "🧮 Calculadora",
+        "🌡️ Mapa de calor",
+        "📊 Tabla",
+        f"🗑️ Descartadas ({disc_count})",
+        "🔬 Diagnóstico",
+    ])
+
+    # ── TAB: ESCANEO AUTOMÁTICO ───────────────────────────────────────────────
+    with tab_scan:
+        _section("🔁", "Escaneo automático — todos los métodos")
+        st.caption(
+            "Escanea Binance P2P sin filtro de método de pago. "
+            "Detecta spreads en CUALQUIER método disponible. "
+            "No necesita configuración de catálogo."
+        )
+
+        sc1, sc2, sc3 = st.columns(3)
+        scan_fiats   = sc1.multiselect("Monedas", ["USD", "EUR", "ARS", "UYU", "COP"], default=["USD", "EUR"], key="scan_fiats")
+        scan_min_net = sc2.number_input("Umbral net (%)", -50.0, 50.0, 0.0, 0.05, "%.2f", key="scan_min")
+        scan_rows    = sc3.slider("Ads por lado", 10, 50, 20, key="scan_rows")
+
+        if st.button("🔁 Escanear ahora", use_container_width=True, type="primary", key="scan_btn"):
+            all_scan: List[SpreadResult] = []
+            with st.spinner("Escaneando todos los métodos…"):
+                for fiat_s in scan_fiats:
+                    try:
+                        b_ads = binance_ex.fetch_ads(asset=asset, fiat=fiat_s, trade_type="BUY",  pay_types=[], rows=scan_rows, merchant_check=merchant_check)
+                        s_ads = binance_ex.fetch_ads(asset=asset, fiat=fiat_s, trade_type="SELL", pay_types=[], rows=scan_rows, merchant_check=merchant_check)
+                        scan_fee_cfg = BINANCE_MAKER_FEES.get(fiat_s, {"verified": 0.0, "non_verified": 0.0})
+                        scan_fee = scan_fee_cfg["verified"] if is_verified else scan_fee_cfg["non_verified"]
+                        cap_cfg_s = caps.get(fiat_s, DEFAULT_CAPITAL.get(fiat_s, {"target_min": 200, "target_max": 2000, "simulado": 500}))
+                        partial = scan_all_methods(
+                            buy_ads_raw=b_ads, sell_ads_raw=s_ads,
+                            fiat=fiat_s, asset=asset,
+                            exchange=exchange_name,
+                            fee_exchange_pct=scan_fee,
+                            capital_target_min=cap_cfg_s["target_min"],
+                            capital_target_max=cap_cfg_s["target_max"],
+                            capital_simulado=cap_cfg_s["simulado"],
+                            min_spread_pct=scan_min_net,
+                            exclude_ads=excl_ads,
+                            ad_threshold_pct=ad_thresh,
+                        )
+                        all_scan.extend(partial)
+                    except Exception as exc:
+                        st.error(f"Error escaneando {fiat_s}: {exc}")
+
+            st.session_state["scan_results"] = all_scan
+
+        scan_results: List[SpreadResult] = st.session_state.get("scan_results", [])
+
+        if scan_results:
+            ok_scan = [r for r in scan_results if r.status == "OK"]
+            st.success(f"✅ {len(ok_scan)} métodos con spread positivo encontrados ({len(scan_results)} totales con datos)")
+            rows_s = []
+            for r in scan_results:
+                cap_src = "📊 Mercado" if r.capital_from_market else "⚠️ Simulado"
+                rows_s.append({
+                    "Método de pago":           r.method_human,
+                    "Fiat":                     r.fiat,
+                    "Estado":                   "🟢 OK" if r.status == "OK" else "🟡 Bajo umbral",
+                    # buy_price_effective = precio que publico en tab COMPRAR (mi anuncio de VENTA, el mayor)
+                    # sell_price_effective = precio que publico en tab VENDER (mi recompra, el menor)
+                    "Mi VENTA (tab Comprar)":   _fmt(r.buy_price_effective,  r.fiat, 4),
+                    "Mi COMPRA (tab Vender)":   _fmt(r.sell_price_effective, r.fiat, 4),
+                    "Spread bruto":             _pct(r.spread_gross_pct),
+                    "Ganancia neta":            _pct(r.net_profit_pct),
+                    "Cap. rec.":                _fmt(r.capital_recommended_fiat, r.fiat, 0),
+                    "Cap. fuente":              cap_src,
+                    "Ref VENTA":                r.ref_buy_ad_label,
+                    "Ref COMPRA":               r.ref_sell_ad_label,
+                })
+            from ui.table import _html_table
+            st.markdown(_html_table(rows_s), unsafe_allow_html=True)
+            st.caption(
+                "Modo Yo Publico: "
+                "**Mi VENTA** = precio que publicás en la tab Comprar de Binance (tu anuncio de venta, el mayor). "
+                "**Mi COMPRA** = precio que publicás en la tab Vender (tu recompra, el menor). "
+                "Spread = VENTA − COMPRA. "
+                "📊 Cap. fuente Mercado = capital basado en liquidez real. "
+                "⚠️ Simulado = mercado con poca liquidez, se usó tu capital configurado."
+            )
+        elif "scan_results" in st.session_state:
+            st.info("Sin métodos con datos de precio en este momento.")
+
+    # ── TAB: TELEGRAM ─────────────────────────────────────────────────────────
+    with tab_tg:
+        _section("🤖", "Alertas automáticas por Telegram")
+
+        with st.expander("⚙️ Configurar CallMeBot para Telegram", expanded=True):
+            st.markdown(
+                "**Pasos para activar (solo una vez):**\n"
+                "1. Abrí Telegram y buscá **@CallMeBot_txtbot**\n"
+                "2. Presioná **START** o escribile `/start`\n"
+                "3. Listo — ya podés recibir mensajes\n\n"
+                "🔗 [Abrir @CallMeBot_txtbot en Telegram](https://t.me/CallMeBot_txtbot)"
+            )
+            tg_token = st.text_input(
+                "👤 Tu username de Telegram (sin @)",
+                placeholder="Sebastian_Clavijo",
+                key="tg_token"
+            )
+            tg_umbral  = st.slider("📊 Umbral mínimo para alertar (% ganancia neta)", 0.10, 5.0, 0.50, 0.05, key="tg_umbral",
+                                   format="%.2f%%",
+                                   help="Solo se envían alertas cuando la brecha supera este porcentaje.")
+            tg_solo_cop = st.checkbox("🇨🇴 Solo alertar métodos COP", value=True, key="tg_solo_cop")
+            tg_intervalo = st.selectbox(
+                "⏱️ Revisar automáticamente cada",
+                [1, 2, 5, 10, 15, 30],
+                index=2,
+                key="tg_intervalo",
+                format_func=lambda x: f"{x} minutos",
+            )
+            tg_chat_id  = ""  # no se usa en esta API
+
+        def _build_tg_message(r: SpreadResult) -> str:
+            buy  = r.ref_buy_ad
+            sell = r.ref_sell_ad
+            def pays(ad):
+                if not ad or not ad.payment_methods: return "—"
+                return ", ".join([m for m in ad.payment_methods if m][:5])
+            pct = r.net_profit_pct or 0
+            sep = "─" * 28
+            return (
+                f"🤖 ALERTA P2P RADAR\n"
+                f"{sep}\n"
+                f"💰 Ganancia neta: {pct:.2f}%\n"
+                f"💱 {r.method_human} ({r.fiat})\n"
+                f"{sep}\n"
+                f"📗 COMPRAR (tab Comprar)\n"
+                f"👤 {buy.advertiser_name if buy else '—'}\n"
+                f"💵 Precio: {_fmt(r.buy_price_effective, r.fiat)} / {r.asset}\n"
+                f"🔴 Límite: {f'{buy.min_amount:,.0f}' if buy else '—'} – {f'{buy.max_amount:,.0f}' if buy else '—'} {r.fiat}\n"
+                f"💳 Métodos: {pays(buy)}\n"
+                f"{sep}\n"
+                f"📕 VENDER (tab Vender)\n"
+                f"👤 {sell.advertiser_name if sell else '—'}\n"
+                f"💵 Precio: {_fmt(r.sell_price_effective, r.fiat)} / {r.asset}\n"
+                f"🔴 Límite: {f'{sell.min_amount:,.0f}' if sell else '—'} – {f'{sell.max_amount:,.0f}' if sell else '—'} {r.fiat}\n"
+                f"💳 Métodos: {pays(sell)}"
+            )
+
+        def _send_telegram(username: str, _unused: str, text: str) -> bool:
+            import urllib.request, urllib.parse
+            params = urllib.parse.urlencode({"user": f"@{username}", "text": text})
+            url = f"https://api.callmebot.com/text.php?{params}"
+            try:
+                req  = urllib.request.Request(url, method="GET")
+                resp = urllib.request.urlopen(req, timeout=10)
+                body = resp.read().decode("utf-8", errors="ignore")
+                return resp.status == 200 and "error" not in body.lower()
+            except Exception as e:
+                st.error(f"Error enviando a Telegram: {e}")
+                return False
+
+        # ── INICIALIZAR ESTADO AUTO-ALERTA ────────────────────────────────────
+        import time as _time
+        from datetime import datetime as _dt
+        for _k, _v in [("auto_alert_on", False), ("auto_alert_last", 0.0), ("auto_alert_log", []), ("auto_alert_sent_ids", set())]:
+            if _k not in st.session_state:
+                st.session_state[_k] = _v
+
+        # ── BOTÓN ACTIVAR / DETENER ───────────────────────────────────────────
+        st.divider()
+        _section("🤖", "Auto-alertas")
+        col_on, col_status = st.columns([1, 2])
+        if col_on.button(
+            "🟢 Activar" if not st.session_state["auto_alert_on"] else "🔴 Detener",
+            disabled=not tg_token,
+            type="primary" if not st.session_state["auto_alert_on"] else "secondary",
+            key="btn_auto"
+        ):
+            st.session_state["auto_alert_on"]       = not st.session_state["auto_alert_on"]
+            st.session_state["auto_alert_last"]      = 0.0
+            st.session_state["auto_alert_log"]       = []
+            st.session_state["auto_alert_sent_ids"]  = set()
+            st.rerun()
+
+        # ── LÓGICA AUTO ───────────────────────────────────────────────────────
+        if st.session_state["auto_alert_on"] and tg_token:
+            ahora       = _time.time()
+            intervalo_s = tg_intervalo * 60
+            restante    = intervalo_s - (ahora - st.session_state["auto_alert_last"])
+
+            if restante <= 0:
+                st.session_state["auto_alert_last"] = ahora
+                # ── Traer datos frescos del mercado ──────────────────────────
+                try:
+                    fresh_res = run_queries(
+                        exchange_name=exchange_name, asset=asset,
+                        mappings=st.session_state["mappings"],
+                        is_verified=is_verified,
+                        publication_mode=pub_mode,
+                        epsilon_fiat=eps_fiat, epsilon_pct=eps_pct,
+                        fee_slippage_pct=fee_slippage_pct,
+                        exclude_ads=excl_ads, ad_threshold_pct=ad_thresh,
+                        capital_cfg=caps, buffer_pct=buf_pct,
+                        min_net_profit_pct=min_net, allow_outside_target=allow_out,
+                        top_n=top_n,
+                        extra_methods=st.session_state.get("custom_methods", []),
+                        merchant_check=merchant_check,
+                    )
+                    # Actualizar también los resultados principales de la app
+                    st.session_state["results"]     = fresh_res
+                    st.session_state["last_update"] = _dt.now()
+                    fresh_ok = [r for r in fresh_res if r.status == "OK"]
+                except Exception as e:
+                    fresh_ok = ok_results  # fallback a datos anteriores si falla
+                    st.session_state["auto_alert_log"].insert(0, f"⚠️ {_dt.now().strftime('%H:%M:%S')} — Error actualizando: {e}")
+
+                candidatos = [
+                    r for r in fresh_ok
+                    if (r.net_profit_pct or 0) >= tg_umbral
+                    and (not tg_solo_cop or r.fiat == "COP")
+                ]
+                nuevos = [r for r in candidatos if r.method_id not in st.session_state["auto_alert_sent_ids"]]
+                if nuevos:
+                    enviados = sum(1 for r in nuevos if _send_telegram(tg_token, "", _build_tg_message(r)))
+                    for r in nuevos:
+                        st.session_state["auto_alert_sent_ids"].add(r.method_id)
+                    log = f"✅ {_dt.now().strftime('%H:%M:%S')} — {enviados} alerta(s) enviada(s)"
+                else:
+                    st.session_state["auto_alert_sent_ids"] = set()
+                    log = f"⏳ {_dt.now().strftime('%H:%M:%S')} — Sin oportunidades ≥ {tg_umbral}%"
+                st.session_state["auto_alert_log"] = ([log] + st.session_state["auto_alert_log"])[:10]
+                _time.sleep(intervalo_s)
+                st.rerun()
+            else:
+                mins, segs = int(restante // 60), int(restante % 60)
+                col_status.info(f"🟢 Activo — próxima revisión en **{mins}:{segs:02d}**")
+                _time.sleep(10)
+                st.rerun()
+        elif not st.session_state["auto_alert_on"]:
+            col_status.caption("⚫ Auto-alertas desactivadas")
+
+        if st.session_state["auto_alert_log"]:
+            with st.expander("📋 Actividad reciente", expanded=True):
+                for entry in st.session_state["auto_alert_log"]:
+                    st.caption(entry)
+
+        # ── ENVÍO MANUAL ──────────────────────────────────────────────────────
+        st.divider()
+        _section("📤", "Envío manual")
+        alert_results = [
+            r for r in ok_results
+            if (r.net_profit_pct or 0) >= tg_umbral
+            and (not tg_solo_cop or r.fiat == "COP")
+        ]
+        col_send, col_test = st.columns(2)
+
+        if col_test.button("🧪 Enviar mensaje de prueba", disabled=not tg_token):
+            if _send_telegram(tg_token, "", "✅ P2P Radar conectado! Las alertas COP están activas."):
+                st.success("✅ Mensaje de prueba enviado. Revisá tu Telegram.")
+            else:
+                st.error("❌ No se pudo enviar. Asegurate de haber iniciado @CallMeBot_txtbot en Telegram.")
+
+        if col_send.button(
+            f"📤 Enviar alertas ahora ({len(alert_results)} oportunidades)",
+            disabled=not tg_token,
+            type="primary"
+        ):
+            if not alert_results:
+                st.warning(f"No hay oportunidades con ganancia ≥ {tg_umbral}% en este momento.")
+            else:
+                sent = 0
+                for r in alert_results:
+                    if _send_telegram(tg_token, "", _build_tg_message(r)):
+                        sent += 1
+                st.success(f"✅ {sent}/{len(alert_results)} alertas enviadas a Telegram.")
+
+        if not tg_token:
+            st.info("👆 Ingresá tu username de Telegram para activar el envío.")
+
+        st.divider()
+        _section("📱", "Vista previa — formato Telegram")
+        st.caption("Así se ve el mensaje en tu bot de Telegram.")
+        tg_html = build_telegram_html(results)
+        components.html(tg_html, height=max(len(ok_results) * 480 + 80, 300), scrolling=True)
+
+        if ok_results:
+            st.divider()
+            with st.expander("📋 Texto plano para copiar", expanded=False):
+                for r in ok_results:
+                    buy  = r.ref_buy_ad
+                    sell = r.ref_sell_ad
+                    pct  = r.net_profit_pct or 0
+
+                    def pays(ad):
+                        if not ad or not ad.payment_methods: return "—"
+                        return ", ".join([m for m in ad.payment_methods if m][:5])
+
+                    txt = (
+                        f"🤖 Bot de Alertas P2P\n"
+                        f"Diferencia: {pct:.2f}% 💰\n\n"
+                        f"COMPRA P2P\n"
+                        f"🍒 Cripto: {r.asset}\n"
+                        f"🏷️ Vendedor: {buy.advertiser_name if buy else '—'}\n"
+                        f"💵 Precio: {_fmt(r.buy_price_effective, r.fiat)} (1 {r.asset})\n"
+                        f"✅ Disponible: {f'{buy.available_amount:.8f}' if buy else '—'} {r.asset}\n"
+                        f"🔴 Límite: {f'{buy.min_amount:,.2f}' if buy else '—'} – {f'{buy.max_amount:,.2f}' if buy else '—'} {r.fiat}\n"
+                        f"🟰 Métodos: {pays(buy)}\n\n"
+                        f"VENTA P2P\n"
+                        f"🍒 Cripto: {r.asset}\n"
+                        f"🏷️ Vendedor: {sell.advertiser_name if sell else '—'}\n"
+                        f"💵 Precio: {_fmt(r.sell_price_effective, r.fiat)} (1 {r.asset})\n"
+                        f"✅ Disponible: {f'{sell.available_amount:.8f}' if sell else '—'} {r.asset}\n"
+                        f"🔴 Límite: {f'{sell.min_amount:,.2f}' if sell else '—'} – {f'{sell.max_amount:,.2f}' if sell else '—'} {r.fiat}\n"
+                        f"🟰 Métodos: {pays(sell)}"
+                    )
+                    st.code(txt, language="")
+                    st.divider()
+
+    # ── TAB: HOLD 🔵 ──────────────────────────────────────────────────────────
+    with tab_hold:
+        _section("🔵", "Estrategia Hold — Comprar ahora, vender después")
+        st.caption(
+            "Analizá si el precio actual está por debajo del promedio histórico. "
+            "Si es así, puede ser buen momento para comprar USDT ahora y vender cuando suba. "
+            "El historial se acumula cada 10 minutos automáticamente."
+        )
+
+        # Cargar historial desde GitHub
+        import requests as _req, base64 as _b64
+        GH_REPO_HOLD    = "sebastianclavijocode/p2p-radar-cop"
+        HISTORY_PATH_HOLD = "P2P-Radar-Anuncios-main/P2P-Radar-Anuncios-main/price_history.json"
+        GH_PAT_HOLD     = st.secrets.get("GH_PAT", "") if hasattr(st, "secrets") else ""
+
+        @st.cache_data(ttl=600)
+        def _load_price_history():
+            url = f"https://api.github.com/repos/{GH_REPO_HOLD}/contents/{HISTORY_PATH_HOLD}"
+            headers = {"Accept": "application/vnd.github.v3+json"}
+            try:
+                r = _req.get(url, headers=headers, timeout=15)
+                if r.status_code == 200:
+                    content = _b64.b64decode(r.json()["content"]).decode("utf-8")
+                    return json.loads(content)
+            except Exception as e:
+                pass
+            return {}
+
+        history_data = _load_price_history()
+
+        if not history_data:
+            st.info("⏳ Todavía no hay historial acumulado. El bot guarda precios cada 10 minutos — volvé en unas horas para ver el análisis.")
+        else:
+            import statistics as _stats
+
+            MAKER_FEE_HOLD = BINANCE_MAKER_FEES.get("COP", {}).get("verified" if is_verified else "non_verified", 0.25)
+            TAKER_FEE_HOLD = 0.14  # USD fijo
+
+            for method_id, data in history_data.items():
+                registros = data.get("registros", [])
+                nombre    = data.get("nombre", method_id)
+                fiat      = data.get("fiat", "COP")
+
+                if len(registros) < 2:
+                    continue
+
+                # Extraer series de precios
+                buy_prices  = [r["taker_buy"]  for r in registros if "taker_buy"  in r]
+                sell_prices = [r["taker_sell"] for r in registros if "taker_sell" in r]
+
+                if not buy_prices or not sell_prices:
+                    buy_prices  = [r["buy_price"]  for r in registros]
+                    sell_prices = [r["sell_price"] for r in registros]
+
+                if not buy_prices: continue
+
+                precio_actual   = buy_prices[-1]
+                promedio        = _stats.mean(buy_prices)
+                minimo          = min(buy_prices)
+                maximo          = max(buy_prices)
+                desv            = _stats.stdev(buy_prices) if len(buy_prices) > 1 else 0
+                pct_vs_promedio = (precio_actual - promedio) / promedio * 100
+                n_registros     = len(registros)
+                horas           = round(n_registros * 10 / 60, 1)
+
+                # Señal de compra
+                if pct_vs_promedio <= -0.3:
+                    señal = "🟢 BUEN MOMENTO — precio bajo vs histórico"
+                    señal_color = "#00d68f"
+                elif pct_vs_promedio <= 0:
+                    señal = "🟡 NEUTRAL — precio levemente bajo"
+                    señal_color = "#ffd700"
+                elif pct_vs_promedio <= 0.3:
+                    señal = "🟠 PRECAUCIÓN — precio levemente alto"
+                    señal_color = "#ff8c00"
+                else:
+                    señal = "🔴 PRECIO ALTO — esperar mejor momento"
+                    señal_color = "#ff4444"
+
+                # Ganancia estimada si vendés al promedio de venta
+                promedio_venta  = _stats.mean(sell_prices) if sell_prices else precio_actual
+                capital_usdt    = caps.get(fiat, {}).get("simulado", 2_000_000) / precio_actual
+                ganancia_hold   = (promedio_venta - precio_actual) * capital_usdt - TAKER_FEE_HOLD * promedio_venta
+                ganancia_hold_pct = (promedio_venta - precio_actual) / precio_actual * 100 - (MAKER_FEE_HOLD)
+
+                st.markdown(f"""
+<div style="
+  background: linear-gradient(135deg, rgba(41,182,246,0.08), rgba(0,100,200,0.04));
+  border: 1px solid rgba(41,182,246,0.3);
+  border-left: 4px solid #29b6f6;
+  border-radius: 14px;
+  padding: 18px 20px;
+  margin-bottom: 16px;
+">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;">
+    <div>
+      <div style="font-size:14px;font-weight:800;color:#fff;">🔵 {nombre}</div>
+      <div style="font-size:10px;color:rgba(255,255,255,0.4);margin-top:2px;">
+        {fiat} · {n_registros} registros · últimas {horas}h
+      </div>
+    </div>
+    <div style="text-align:right;">
+      <div style="font-size:12px;font-weight:700;color:{señal_color};">{señal}</div>
+      <div style="font-size:11px;color:rgba(255,255,255,0.4);margin-top:2px;">
+        {pct_vs_promedio:+.2f}% vs promedio
+      </div>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;">
+    <div style="background:rgba(255,255,255,0.04);border-radius:8px;padding:10px;text-align:center;">
+      <div style="font-size:9px;color:rgba(255,255,255,0.35);text-transform:uppercase;margin-bottom:4px;">Precio actual</div>
+      <div style="font-size:15px;font-weight:800;color:#fff;">{precio_actual:,.2f}</div>
+    </div>
+    <div style="background:rgba(255,255,255,0.04);border-radius:8px;padding:10px;text-align:center;">
+      <div style="font-size:9px;color:rgba(255,255,255,0.35);text-transform:uppercase;margin-bottom:4px;">Promedio</div>
+      <div style="font-size:15px;font-weight:800;color:#29b6f6;">{promedio:,.2f}</div>
+    </div>
+    <div style="background:rgba(255,255,255,0.04);border-radius:8px;padding:10px;text-align:center;">
+      <div style="font-size:9px;color:rgba(255,255,255,0.35);text-transform:uppercase;margin-bottom:4px;">Mínimo</div>
+      <div style="font-size:15px;font-weight:800;color:#00d68f;">{minimo:,.2f}</div>
+    </div>
+    <div style="background:rgba(255,255,255,0.04);border-radius:8px;padding:10px;text-align:center;">
+      <div style="font-size:9px;color:rgba(255,255,255,0.35);text-transform:uppercase;margin-bottom:4px;">Máximo</div>
+      <div style="font-size:15px;font-weight:800;color:#ff6b6b;">{maximo:,.2f}</div>
+    </div>
+  </div>
+
+  <div style="border-top:1px solid rgba(41,182,246,0.15);padding-top:12px;display:flex;justify-content:space-between;align-items:center;">
+    <div style="font-size:11px;color:rgba(255,255,255,0.4);">
+      📦 Si comprás ahora ~{capital_usdt:.1f} USDT y vendés al promedio histórico:
+    </div>
+    <div style="font-size:13px;font-weight:800;color:{'#00d68f' if ganancia_hold > 0 else '#ff4444'};">
+      {'▲' if ganancia_hold > 0 else '▼'} {ganancia_hold:,.0f} {fiat} ({ganancia_hold_pct:+.2f}%)
+    </div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+                # Mini gráfico de evolución
+                if len(buy_prices) >= 3:
+                    import pandas as _pd
+                    import altair as _alt
+                    timestamps = [r["ts"][:16].replace("T", " ") for r in registros[-len(buy_prices):]]
+
+                    # Rango del eje Y configurable
+                    precio_min_real = int(min(buy_prices) * 0.995)
+                    precio_max_real = int(max(buy_prices) * 1.005)
+                    gcol1, gcol2 = st.columns(2)
+                    y_min = gcol1.number_input(
+                        f"Eje Y mínimo — {nombre}",
+                        min_value=1000, max_value=9000,
+                        value=max(1000, precio_min_real - 100),
+                        step=50, key=f"ymin_{method_id}",
+                        label_visibility="collapsed",
+                    )
+                    y_max = gcol2.number_input(
+                        f"Eje Y máximo — {nombre}",
+                        min_value=1000, max_value=9999,
+                        value=min(9999, precio_max_real + 100),
+                        step=50, key=f"ymax_{method_id}",
+                        label_visibility="collapsed",
+                    )
+                    gcol1.caption(f"Y mín: {y_min:,}")
+                    gcol2.caption(f"Y máx: {y_max:,}")
+
+                    df_hist = _pd.DataFrame({
+                        "Hora":          timestamps,
+                        "Precio compra": buy_prices,
+                        "Promedio":      [promedio] * len(buy_prices),
+                    })
+                    df_melt = df_hist.melt("Hora", var_name="Serie", value_name="Precio")
+                    chart = _alt.Chart(df_melt).mark_line().encode(
+                        x=_alt.X("Hora:N", axis=_alt.Axis(labelAngle=-45, labelLimit=80)),
+                        y=_alt.Y("Precio:Q", scale=_alt.Scale(domain=[y_min, y_max]), title="COP"),
+                        color=_alt.Color("Serie:N", scale=_alt.Scale(
+                            domain=["Precio compra", "Promedio"],
+                            range=["#29b6f6", "#ff8c00"]
+                        )),
+                        tooltip=["Hora", "Serie", "Precio"]
+                    ).properties(height=200)
+                    st.altair_chart(chart, use_container_width=True)
+
+                st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
+
+            if not any(len(d.get("registros", [])) >= 2 for d in history_data.values()):
+                st.info("⏳ Acumulando datos... Volvé en unas horas para ver el análisis completo.")
+
+    # ── TAB: CALCULADORA 🧮 ───────────────────────────────────────────────────
+    with tab_calc:
+        _section("🧮", "Calculadora de operaciones P2P")
+        st.caption("Calculá la ganancia neta de cualquier operación con comisiones separadas para compra y venta.")
+
+        components.html("""
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}
+body{background:transparent;color:#fff;padding:8px 4px 16px;}
+.section{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:14px 16px;margin-bottom:10px;}
+.section-title{font-size:11px;font-weight:700;color:rgba(255,255,255,0.45);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;display:flex;align-items:center;gap:6px;}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;}
+.field label{font-size:11px;color:rgba(255,255,255,0.45);display:block;margin-bottom:4px;}
+.field input,.field select{width:100%;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;padding:7px 10px;font-size:13px;outline:none;}
+.field input:focus{border-color:rgba(255,255,255,0.25);}
+.radio-group{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;}
+.radio-btn{display:flex;align-items:center;gap:5px;font-size:12px;color:rgba(255,255,255,0.7);cursor:pointer;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:5px 10px;}
+.radio-btn:hover{background:rgba(255,255,255,0.1);}
+.radio-btn input{accent-color:#00d68f;}
+.result-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;}
+.metric{background:rgba(255,255,255,0.04);border-radius:8px;padding:10px 12px;}
+.metric-label{font-size:10px;color:rgba(255,255,255,0.4);margin-bottom:4px;}
+.metric-value{font-size:18px;font-weight:700;color:#fff;}
+.metric-value.pos{color:#00d68f;}
+.metric-value.neg{color:#ff4444;}
+.metric-sub{font-size:10px;color:rgba(255,255,255,0.3);margin-top:2px;}
+.fee-detail{font-size:11px;color:rgba(255,255,255,0.4);background:rgba(255,255,255,0.03);border-radius:8px;padding:8px 12px;margin-top:8px;display:flex;flex-direction:column;gap:4px;}
+.fee-row{display:flex;justify-content:space-between;}
+.custom-box{display:none;margin-top:8px;}
+</style>
+</head><body>
+
+<div class="section">
+  <div class="section-title"><i class="ti ti-arrow-up"></i> Compra</div>
+  <div class="grid3">
+    <div class="field"><label>Capital COP</label><input type="number" id="capitalCOP" value="2000000" step="10000"></div>
+    <div class="field"><label>Precio compra (COP/USDT)</label><input type="number" id="precioCom" value="3745" step="1"></div>
+    <div class="field"><label>USDT comprados (opcional)</label><input type="number" id="usdtCom" placeholder="Auto" step="0.01"></div>
+  </div>
+  <div style="margin-top:10px;">
+    <div class="section-title" style="margin-bottom:6px;">Comisión de compra</div>
+    <div class="radio-group">
+      <label class="radio-btn"><input type="radio" name="feeCom" value="maker" checked> Maker (0.25%)</label>
+      <label class="radio-btn"><input type="radio" name="feeCom" value="taker"> Taker ($0.07)</label>
+      <label class="radio-btn"><input type="radio" name="feeCom" value="none"> Sin comisión</label>
+      <label class="radio-btn"><input type="radio" name="feeCom" value="custom"> Personalizada</label>
+    </div>
+    <div class="custom-box" id="feeComCustom">
+      <div class="grid2" style="margin-top:8px;">
+        <div class="field"><label>% comisión compra</label><input type="number" id="feeComPct" value="0.25" step="0.01" min="0"></div>
+        <div class="field"><label>Fija USDT compra</label><input type="number" id="feeComFixed" value="0" step="0.01" min="0"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-title"><i class="ti ti-arrow-down"></i> Venta</div>
+  <div class="grid2">
+    <div class="field"><label>Precio venta (COP/USDT)</label><input type="number" id="precioVen" value="3810" step="1"></div>
+    <div class="field"><label>USDT vendidos (opcional)</label><input type="number" id="usdtVen" placeholder="Auto (igual a compra)"></div>
+  </div>
+  <div style="margin-top:10px;">
+    <div class="section-title" style="margin-bottom:6px;">Comisión de venta</div>
+    <div class="radio-group">
+      <label class="radio-btn"><input type="radio" name="feeVen" value="maker" checked> Maker (0.25%)</label>
+      <label class="radio-btn"><input type="radio" name="feeVen" value="taker"> Taker ($0.07)</label>
+      <label class="radio-btn"><input type="radio" name="feeVen" value="none"> Sin comisión</label>
+      <label class="radio-btn"><input type="radio" name="feeVen" value="custom"> Personalizada</label>
+    </div>
+    <div class="custom-box" id="feeVenCustom">
+      <div class="grid2" style="margin-top:8px;">
+        <div class="field"><label>% comisión venta</label><input type="number" id="feeVenPct" value="0.25" step="0.01" min="0"></div>
+        <div class="field"><label>Fija USDT venta</label><input type="number" id="feeVenFixed" value="0" step="0.01" min="0"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-title"><i class="ti ti-chart-bar"></i> Resultado</div>
+  <div class="result-grid">
+    <div class="metric"><div class="metric-label">USDT operados</div><div class="metric-value" id="resUSDT">—</div></div>
+    <div class="metric"><div class="metric-label">Comisión compra</div><div class="metric-value" id="resFeeCom">—</div><div class="metric-sub" id="resFeeComCOP">—</div></div>
+    <div class="metric"><div class="metric-label">Comisión venta</div><div class="metric-value" id="resFeeVen">—</div><div class="metric-sub" id="resFeeVenCOP">—</div></div>
+    <div class="metric"><div class="metric-label">Capital recuperado</div><div class="metric-value" id="resCapRec">—</div></div>
+    <div class="metric"><div class="metric-label">Brecha (spread bruto)</div><div class="metric-value" id="resSpread">—</div><div class="metric-sub" id="resSpreadCOP">—</div></div>
+    <div class="metric"><div class="metric-label">Ganancia bruta</div><div class="metric-value" id="resGanBruta">—</div></div>
+    <div class="metric"><div class="metric-label">Ganancia neta</div><div class="metric-value pos" id="resGanNeta">—</div><div class="metric-sub" id="resGanPct">—</div></div>
+  </div>
+  <div class="fee-detail" id="feeDetail"></div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const fmt = (n,d=2) => isNaN(n)?'—':n.toLocaleString('es-CO',{minimumFractionDigits:d,maximumFractionDigits:d});
+const fmtCOP = n => isNaN(n)?'—':'$'+fmt(n,0);
+const getFee = name => document.querySelector(`input[name="${name}"]:checked`)?.value||'maker';
+
+function calcFee(type,usdt,pctId,fixedId){
+  if(type==='maker') return {usdt:usdt*0.0025,label:'Maker 0.25%'};
+  if(type==='taker') return {usdt:0.07,label:'Taker $0.07 USDT'};
+  if(type==='none')  return {usdt:0,label:'Sin comisión'};
+  const pct=(parseFloat($(pctId)?.value||0))/100;
+  const fix=parseFloat($(fixedId)?.value||0);
+  return {usdt:usdt*pct+fix,label:`${$(pctId)?.value}% + $${fix} USDT`};
+}
+
+function calculate(){
+  const capitalCOP=parseFloat($('capitalCOP').value)||0;
+  const precioCom=parseFloat($('precioCom').value)||0;
+  const precioVen=parseFloat($('precioVen').value)||0;
+  if(!capitalCOP||!precioCom||!precioVen) return;
+
+  const usdtComRaw=parseFloat($('usdtCom').value);
+  const usdtBruto=isNaN(usdtComRaw)||usdtComRaw<=0?capitalCOP/precioCom:usdtComRaw;
+
+  const feeCom=calcFee(getFee('feeCom'),usdtBruto,'feeComPct','feeComFixed');
+  const usdtNeto=usdtBruto-feeCom.usdt;
+
+  const usdtVenRaw=parseFloat($('usdtVen').value);
+  const usdtVender=isNaN(usdtVenRaw)||usdtVenRaw<=0?usdtNeto:usdtVenRaw;
+
+  const feeVen=calcFee(getFee('feeVen'),usdtVender,'feeVenPct','feeVenFixed');
+  const usdtFinal=usdtVender-feeVen.usdt;
+
+  const capRec=usdtFinal*precioVen;
+  const ganNeta=capRec-capitalCOP;
+  const ganPct=(ganNeta/capitalCOP)*100;
+  const feeComCOP=feeCom.usdt*precioCom;
+  const feeVenCOP=feeVen.usdt*precioVen;
+  const spreadBruto=((precioVen-precioCom)/precioCom*100);
+  const ganBruta=usdtBruto*(precioVen-precioCom);
+
+  $('resUSDT').textContent=fmt(usdtBruto)+' USDT';
+  $('resFeeCom').textContent=fmt(feeCom.usdt)+' USDT';
+  $('resFeeComCOP').textContent='≈ '+fmtCOP(feeComCOP);
+  $('resFeeVen').textContent=fmt(feeVen.usdt)+' USDT';
+  $('resFeeVenCOP').textContent='≈ '+fmtCOP(feeVenCOP);
+  $('resCapRec').textContent=fmtCOP(capRec);
+  if($('resSpread')) { $('resSpread').textContent=(spreadBruto>=0?'+':'')+spreadBruto.toFixed(4)+'%'; }
+  if($('resSpreadCOP')) { $('resSpreadCOP').textContent='≈ '+fmtCOP(ganBruta)+' bruto'; }
+  if($('resGanBruta')) { $('resGanBruta').textContent=fmtCOP(ganBruta); }
+  const netaEl=$('resGanNeta');
+  netaEl.textContent=fmtCOP(ganNeta);
+  netaEl.className='metric-value '+(ganNeta>=0?'pos':'neg');
+  $('resGanPct').textContent=(ganPct>=0?'+':'')+ganPct.toFixed(4)+'%';
+  $('feeDetail').innerHTML=
+    `<div class="fee-row"><span>Comisión compra</span><span>${feeCom.label} = ${fmt(feeCom.usdt)} USDT (${fmtCOP(feeComCOP)})</span></div>`+
+    `<div class="fee-row"><span>Comisión venta</span><span>${feeVen.label} = ${fmt(feeVen.usdt)} USDT (${fmtCOP(feeVenCOP)})</span></div>`+
+    `<div class="fee-row"><span>USDT netos vendidos</span><span>${fmt(usdtFinal)} USDT</span></div>`;
+}
+
+['capitalCOP','precioCom','precioVen','usdtCom','usdtVen','feeComPct','feeComFixed','feeVenPct','feeVenFixed']
+  .forEach(id=>{const el=$(id);if(el)el.addEventListener('input',calculate);});
+document.querySelectorAll('input[type=radio]').forEach(r=>r.addEventListener('change',()=>{
+  $('feeComCustom').style.display=getFee('feeCom')==='custom'?'block':'none';
+  $('feeVenCustom').style.display=getFee('feeVen')==='custom'?'block':'none';
+  calculate();
+}));
+calculate();
+</script>
+</body></html>
+""", height=820, scrolling=False)
+
+    # ── TAB: MAPA DE CALOR 🌡️ ────────────────────────────────────────────────
+    with tab_heat:
+        _section("🌡️", "Mapa de calor — mejores horas para operar")
+        st.caption("Spread neto promedio por hora del día y día de la semana. Más verde = mejor oportunidad de arbitraje en COP.")
+
+        import requests as _req2, base64 as _b642
+        from datetime import datetime as _dtime, timedelta as _td
+        import statistics as _stats2
+
+        GH_REPO_HEAT    = "sebastianclavijocode/p2p-radar-cop"
+        HISTORY_PATH_HEAT = "P2P-Radar-Anuncios-main/P2P-Radar-Anuncios-main/price_history.json"
+
+        @st.cache_data(ttl=600)
+        def _load_history_heat():
+            url = f"https://api.github.com/repos/{GH_REPO_HEAT}/contents/{HISTORY_PATH_HEAT}"
+            try:
+                r = _req2.get(url, headers={"Accept": "application/vnd.github.v3+json"}, timeout=15)
+                if r.status_code == 200:
+                    return json.loads(_b642.b64decode(r.json()["content"]).decode("utf-8"))
+            except: pass
+            return {}
+
+        hist = _load_history_heat()
+
+        if not hist:
+            st.info("⏳ No hay historial todavía. El bot guarda precios cada 10 minutos automáticamente.")
+        else:
+            # ── Filtros ───────────────────────────────────────────────────────
+            fc1, fc2 = st.columns([2, 2])
+            periodo_opts = {"Últimos 7 días": 7, "Últimos 14 días": 14, "Últimos 30 días": 30, "Todo": 9999, "Personalizado": 0}
+            periodo_sel  = fc1.selectbox("Período", list(periodo_opts.keys()), key="ht_periodo")
+            metodo_names = ["Todos"] + [d.get("nombre", mid) for mid, d in hist.items()]
+            metodo_sel   = fc2.selectbox("Método", metodo_names, key="ht_metodo")
+
+            fecha_ini = fecha_fin = None
+            if periodo_sel == "Personalizado":
+                pc1, pc2 = st.columns(2)
+                fecha_ini = pc1.date_input("Desde", key="ht_desde")
+                fecha_fin = pc2.date_input("Hasta", key="ht_hasta")
+
+            dias_filtro = periodo_opts.get(periodo_sel, 7)
+            now_utc = _dtime.utcnow()
+
+            # ── Recolectar registros ──────────────────────────────────────────
+            registros_flat = []
+            for mid, data in hist.items():
+                nombre_m = data.get("nombre", mid)
+                if metodo_sel != "Todos" and nombre_m != metodo_sel:
+                    continue
+                for r in data.get("registros", []):
+                    try:
+                        ts = _dtime.fromisoformat(r["ts"].replace("Z", ""))
+                        if periodo_sel == "Personalizado" and fecha_ini and fecha_fin:
+                            if not (fecha_ini <= ts.date() <= fecha_fin): continue
+                        elif dias_filtro < 9999:
+                            if (now_utc - ts).days >= dias_filtro: continue
+                        registros_flat.append({
+                            "hora":   ts.hour,
+                            "dia":    ts.weekday(),
+                            "spread": abs(r.get("spread_pct", 0)),
+                        })
+                    except: continue
+
+            if len(registros_flat) < 3:
+                st.info("⏳ Pocos datos para este período. Seleccioná un rango más amplio o esperá más registros.")
+            else:
+                # ── Calcular matriz 7x24 ──────────────────────────────────────
+                DIAS_ES = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+                matriz  = [[[] for _ in range(24)] for _ in range(7)]
+                for r in registros_flat:
+                    matriz[r["dia"]][r["hora"]].append(r["spread"])
+
+                promedios = [
+                    [round(_stats2.mean(v), 4) if v else None for v in row]
+                    for row in matriz
+                ]
+                todos_vals = [v for row in promedios for v in row if v is not None]
+                mx = max(todos_vals) if todos_vals else 1
+                mn = min(todos_vals) if todos_vals else 0
+
+                # Mejores horas globales
+                hora_prom = {}
+                for h in range(24):
+                    vals = [promedios[d][h] for d in range(7) if promedios[d][h] is not None]
+                    if vals: hora_prom[h] = round(_stats2.mean(vals), 4)
+                top3 = sorted(hora_prom, key=hora_prom.get, reverse=True)[:3]
+                st.success(f"🏆 Mejores horas: " + "  ·  ".join([f"**{h}:00** ({hora_prom[h]:.3f}%)" for h in top3]))
+                st.caption(f"Basado en {len(registros_flat)} registros de {metodo_sel}")
+
+                # ── Renderizar heatmap HTML ───────────────────────────────────
+                def color_cell(v, mn, mx):
+                    if v is None: return "rgba(255,255,255,0.04)", "—"
+                    t = (v - mn) / (mx - mn + 0.0001)
+                    if   t < 0.2: c = "#1a2a1a"
+                    elif t < 0.4: c = "#1e3d1e"
+                    elif t < 0.6: c = "#2a5e2a"
+                    elif t < 0.8: c = "#3a8a3a"
+                    else:         c = "#00d68f"
+                    return c, f"{v:.3f}%"
+
+                CW, CH = 34, 30
+                rows_html = ""
+                # Cabecera horas
+                hora_th = "".join(
+                    f'<div style="font-size:10px;color:rgba(255,255,255,0.4);text-align:center;line-height:{CH}px;">'
+                    f'{"" if h%4!=0 else str(h)}</div>'
+                    for h in range(24)
+                )
+                rows_html += f'<div style="display:grid;grid-template-columns:40px repeat(24,{CW}px);gap:2px;margin-bottom:2px;"><div></div>{hora_th}</div>'
+
+                for di, dia in enumerate(DIAS_ES):
+                    cells = ""
+                    for h in range(24):
+                        bg, label = color_cell(promedios[di][h], mn, mx)
+                        is_top = h in top3
+                        border = "2px solid #ffd700" if is_top else "none"
+                        cells += (
+                            f'<div title="{dia} {h}:00 → {label}" style="'
+                            f'width:{CW-2}px;height:{CH-2}px;background:{bg};border-radius:3px;'
+                            f'border:{border};box-sizing:border-box;cursor:pointer;'
+                            f'display:flex;align-items:center;justify-content:center;"></div>'
+                        )
+                    rows_html += (
+                        f'<div style="display:grid;grid-template-columns:40px repeat(24,{CW}px);gap:2px;margin-bottom:2px;">'
+                        f'<div style="font-size:11px;color:rgba(255,255,255,0.5);line-height:{CH}px;text-align:right;padding-right:6px;">{dia}</div>'
+                        f'{cells}</div>'
+                    )
+
+                # Leyenda
+                leyenda = "".join(
+                    f'<div style="width:18px;height:14px;background:{c};border-radius:2px;"></div>'
+                    for c in ["#1a2a1a","#1e3d1e","#2a5e2a","#3a8a3a","#00d68f"]
+                )
+
+                components.html(f"""
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>body{{margin:0;padding:4px 2px 12px;background:transparent;font-family:-apple-system,sans-serif;}}</style>
+</head><body>
+{rows_html}
+<div style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:11px;color:rgba(255,255,255,0.4);">
+  <span>Bajo</span>{leyenda}<span>Alto</span>
+  <span style="margin-left:12px;color:rgba(255,255,255,0.25);">Pasá el mouse por cada celda para ver el valor exacto</span>
+  <span style="margin-left:12px;">⭐ = top 3 horas</span>
+</div>
+</body></html>
+""", height=len(DIAS_ES) * (CH + 4) + 80, scrolling=False)
+
+    # ── TAB: TABLA ────────────────────────────────────────────────────────────
+    with tab_table:
+        _section("📊", "Tabla — oportunidades válidas")
+        render_ok_table(results)
+
+    # ── TAB: DESCARTADAS ──────────────────────────────────────────────────────
+    with tab_disc:
+        st.caption(
+            "Métodos sin oportunidad. "
+            "'Net bajo' → bajá el umbral. "
+            "'Sin anuncios' → verificá el Mapeo de métodos."
+        )
+        render_discarded_table(results)
+
+    # ── TAB: DIAGNÓSTICO ──────────────────────────────────────────────────────
+    with tab_diag:
+        _section("🔬", "Diagnóstico — todos los métodos")
+        st.caption(
+            "Esta tabla muestra datos brutos de TODOS los métodos sin importar el umbral. "
+            "'NO_ADS' con 0 anuncios = ID de pago incorrecto. "
+            "Usá el botón de abajo para descubrir los IDs reales de Binance."
+        )
+
+        diag_rows = []
+        for r in results:
+            diag_rows.append({
+                "Método":                r.method_human,
+                "Moneda":                r.fiat,
+                "Estado":                r.status,
+                "Anuncios COMPRA":       r.buy_ads_count,
+                "Anuncios VENTA":        r.sell_ads_count,
+                "Mi precio VENTA":       f"{r.buy_price_effective:,.4f}" if r.buy_price_effective else "—",
+                "Mi precio COMPRA":      f"{r.sell_price_effective:,.4f}" if r.sell_price_effective else "—",
+                "Spread bruto":          f"{r.spread_gross_pct:.4f}%" if r.spread_gross_pct is not None else "—",
+                "Ganancia neta":         f"{r.net_profit_pct:.4f}%" if r.net_profit_pct is not None else "—",
+                "IDs de pago":           r.method_mapped,
+                "Detalle":               (r.error_msg or "")[:80],
+            })
+        if diag_rows:
+            from ui.table import _html_table
+            st.markdown(_html_table(diag_rows), unsafe_allow_html=True)
+
+        st.divider()
+        _section("🔎", "Buscar método de pago por nombre")
+        st.caption(
+            "Ingresá el nombre exacto (o parcial) del método de pago tal como aparece en Binance. "
+            "Se consultan ambas tabs (Comprar y Vender) y si hay anuncios podés agregarlo al radar."
+        )
+        pm_col1, pm_col2, pm_col3 = st.columns([3, 1, 1])
+        pm_search_name = pm_col1.text_input(
+            "Nombre del método de pago",
+            placeholder="Ej: WallyTech, Zinli, Facebank...",
+            key="pm_search_name",
+        )
+        pm_search_fiat = pm_col2.selectbox("Moneda", ["USD", "ARS", "EUR", "UYU", "COP"], key="pm_search_fiat")
+        pm_search_rows = pm_col3.slider("Ads a traer", 10, 50, 20, key="pm_search_rows")
+
+        if st.button("🔎 Buscar método", type="primary", key="pm_search_btn"):
+            if not pm_search_name.strip():
+                st.warning("Ingresá un nombre de método de pago.")
+            else:
+                with st.spinner(f"Buscando '{pm_search_name}' en {pm_search_fiat}…"):
+                    try:
+                        pm_buy  = binance_ex.fetch_ads(asset=asset, fiat=pm_search_fiat, trade_type="BUY",
+                                                       pay_types=[pm_search_name.strip()], rows=pm_search_rows,
+                                                       merchant_check=False)
+                        pm_sell = binance_ex.fetch_ads(asset=asset, fiat=pm_search_fiat, trade_type="SELL",
+                                                       pay_types=[pm_search_name.strip()], rows=pm_search_rows,
+                                                       merchant_check=False)
+                        # Recolectar todos los IDs reales encontrados
+                        real_ids: set = set()
+                        for ad in pm_buy + pm_sell:
+                            for m in ad.payment_methods:
+                                if m and pm_search_name.strip().lower() in m.lower():
+                                    real_ids.add(m)
+                        st.session_state["pm_search_result"] = {
+                            "name": pm_search_name.strip(),
+                            "fiat": pm_search_fiat,
+                            "buy_count": len(pm_buy),
+                            "sell_count": len(pm_sell),
+                            "real_ids": sorted(real_ids),
+                            "sample_buy":  [{"Anunciante": a.advertiser_name, "Precio": f"{a.price:,.4f} {pm_search_fiat}",
+                                             "Disponible": f"{a.available_amount:,.2f} {asset}",
+                                             "Métodos": ", ".join(a.payment_methods[:3])} for a in pm_buy[:5]],
+                            "sample_sell": [{"Anunciante": a.advertiser_name, "Precio": f"{a.price:,.4f} {pm_search_fiat}",
+                                             "Disponible": f"{a.available_amount:,.2f} {asset}",
+                                             "Métodos": ", ".join(a.payment_methods[:3])} for a in pm_sell[:5]],
+                        }
+                    except Exception as exc:
+                        st.error(f"Error buscando: {exc}")
+
+        if "pm_search_result" in st.session_state:
+            res_pm = st.session_state["pm_search_result"]
+            buy_c, sell_c = res_pm["buy_count"], res_pm["sell_count"]
+            real_ids = res_pm["real_ids"]
+
+            if buy_c == 0 and sell_c == 0:
+                st.error(f"No se encontraron anuncios para '{res_pm['name']}' en {res_pm['fiat']}. Verificá el nombre exacto.")
+            else:
+                st.success(f"✅ '{res_pm['name']}' en {res_pm['fiat']}: **{buy_c}** anuncios en tab Comprar · **{sell_c}** en tab Vender")
+                if real_ids:
+                    st.info(f"IDs reales encontrados en Binance: `{'`, `'.join(real_ids)}`")
+                from ui.table import _html_table
+                rc1, rc2 = st.columns(2)
+                with rc1:
+                    st.caption("Tab Comprar (anunciantes vendiendo)")
+                    if res_pm["sample_buy"]:
+                        st.markdown(_html_table(res_pm["sample_buy"]), unsafe_allow_html=True)
+                with rc2:
+                    st.caption("Tab Vender (anunciantes comprando)")
+                    if res_pm["sample_sell"]:
+                        st.markdown(_html_table(res_pm["sample_sell"]), unsafe_allow_html=True)
+
+                st.markdown("**Agregar al radar**")
+                add2_col1, add2_col2, add2_col3 = st.columns(3)
+                id_options = real_ids if real_ids else [res_pm["name"]]
+                sel_real_id  = add2_col1.selectbox("ID real en Binance", id_options, key="pm_add_real_id")
+                add2_name    = add2_col2.text_input("Nombre visible", value=res_pm["name"], key="pm_add_name")
+                add2_fiat    = add2_col3.selectbox("Moneda", ["USD", "ARS", "EUR", "UYU", "COP"],
+                                                   index=["USD","ARS","EUR","UYU","COP"].index(res_pm["fiat"])
+                                                   if res_pm["fiat"] in ["USD","ARS","EUR","UYU","COP"] else 0,
+                                                   key="pm_add_fiat")
+                if st.button("➕ Agregar al radar", type="primary", key="pm_add_btn"):
+                    method_id = sel_real_id.lower().replace(" ", "_").replace("-", "_")
+                    custom = st.session_state.get("custom_methods", [])
+                    already = any(m["id"] == method_id for m in custom) or \
+                              any(m["id"] == method_id for m in METHODS_CATALOG)
+                    if already:
+                        st.warning(f"'{add2_name}' ya está en el radar.")
+                    else:
+                        custom = add_custom_method(custom, method_id, add2_name, add2_fiat, sel_real_id, exchange=exchange_name)
+                        save_custom_methods(custom)
+                        st.session_state["custom_methods"] = custom
+                        st.success(f"✅ '{add2_name}' agregado. Presioná **Actualizar** para incluirlo.")
+                        st.rerun()
+
+        st.divider()
+        _section("🔍", "Descubrir métodos de pago disponibles en Binance")
+        st.caption(
+            "Escanea Binance SIN filtro de comerciante para ver TODOS los métodos disponibles. "
+            "Desde acá podés agregar cualquiera al radar con un click."
+        )
+        disc_fiats = st.multiselect(
+            "Monedas a escanear",
+            ["USD", "EUR", "ARS", "UYU", "COP"],
+            default=["USD"],
+            key="disc_fiats",
+            help="Seleccioná una o varias monedas. Cada moneda hace 2 consultas a Binance."
+        )
+        disc_pm_filter = st.text_input(
+            "Filtrar por método de pago (opcional)",
+            placeholder="Ej: Prex, Zinli, Facebank… — dejá vacío para ver todos",
+            key="disc_pm_filter",
+        )
+        disc_n = st.slider("Anuncios por moneda", 5, 20, 20, key="disc_n")
+        if st.button("🔍 Escanear métodos disponibles", key="disc_btn"):
+            if not disc_fiats:
+                st.warning("Seleccioná al menos una moneda.")
+            else:
+                import time as _time
+                all_by_fiat: Dict[str, Dict[str, int]] = {}
+                errors = []
+                prog = st.progress(0, text="Iniciando…")
+                total = len(disc_fiats)
+                for i, fiat_d in enumerate(disc_fiats):
+                    prog.progress((i) / total, text=f"Consultando {fiat_d}…")
+                    try:
+                        # merchant_check=False: descubrimiento completo sin restricción de merchants
+                        # (merchantCheck=True + rows>30 da error 000002 en la API de Binance)
+                        buy_raw  = binance_ex.fetch_ads(asset=asset, fiat=fiat_d, trade_type="BUY",  pay_types=[], rows=disc_n, merchant_check=False)
+                        _time.sleep(1.5)
+                        sell_raw = binance_ex.fetch_ads(asset=asset, fiat=fiat_d, trade_type="SELL", pay_types=[], rows=disc_n, merchant_check=False)
+                        _time.sleep(1.5)
+                        methods: Dict[str, int] = {}
+                        for ad in buy_raw + sell_raw:
+                            for pm in ad.payment_methods:
+                                if pm:
+                                    methods[pm] = methods.get(pm, 0) + 1
+                        if methods:
+                            all_by_fiat[fiat_d] = methods
+                        else:
+                            errors.append(f"{fiat_d}: sin anuncios retornados por Binance")
+                    except Exception as exc:
+                        errors.append(f"{fiat_d}: {exc}")
+                prog.progress(1.0, text="Listo")
+
+                if errors:
+                    for e in errors:
+                        st.error(e)
+
+                combined = []
+                for fiat_d, methods in all_by_fiat.items():
+                    for pm, count in sorted(methods.items(), key=lambda x: x[1], reverse=True):
+                        combined.append({"Moneda": fiat_d, "Método de pago": pm, "Anuncios activos (liquidez)": count})
+
+                if combined:
+                    st.session_state["disc_methods_v2"] = combined
+                else:
+                    st.warning(
+                        "Sin resultados. Posibles causas: Binance bloqueó la consulta (rate limit), "
+                        "la moneda no tiene anuncios activos, o hubo un error de red. "
+                        "Esperá 30 segundos y volvé a intentar."
+                    )
+
+        if "disc_methods_v2" in st.session_state:
+            combined = st.session_state["disc_methods_v2"]
+            pm_filter = st.session_state.get("disc_pm_filter", "").strip().lower()
+            filtered_combined = [r for r in combined if pm_filter in r["Método de pago"].lower()] if pm_filter else combined
+            st.success(f"✅ {len(filtered_combined)} método{'s' if len(filtered_combined) != 1 else ''} {'que coinciden' if pm_filter else 'encontrados'} ({len(combined)} total)")
+            from ui.table import _html_table
+            st.markdown(_html_table(filtered_combined), unsafe_allow_html=True)
+            method_ids = list(dict.fromkeys(r["Método de pago"] for r in filtered_combined))
+            disc_fiat_sel = filtered_combined[0]["Moneda"] if filtered_combined else "USD"
+
+            st.divider()
+            st.markdown("**Agregar método al radar**")
+            st.caption("Seleccioná un método de la lista para monitorearlo.")
+            add_col1, add_col2, add_col3 = st.columns(3)
+            sel_pm   = add_col1.selectbox("Método de pago", method_ids, key="add_pm")
+            # Auto-detect fiat from the combined results
+            auto_fiat = next((r["Moneda"] for r in combined if r["Método de pago"] == sel_pm), disc_fiat_sel)
+            add_name = add_col2.text_input("Nombre visible", value=sel_pm, key="add_name")
+            add_fiat = add_col3.selectbox("Moneda", ["USD", "ARS", "EUR", "UYU", "COP"],
+                                          index=["USD","ARS","EUR","UYU","COP"].index(auto_fiat)
+                                          if auto_fiat in ["USD","ARS","EUR","UYU","COP"] else 0,
+                                          key="add_fiat")
+
+            if st.button("➕ Agregar al radar", type="primary", key="add_method_btn"):
+                method_id = sel_pm.lower().replace(" ", "_").replace("-", "_")
+                custom = st.session_state.get("custom_methods", [])
+                already = any(m["id"] == method_id for m in custom) or \
+                          any(m["id"] == method_id for m in METHODS_CATALOG)
+                if already:
+                    st.warning(f"'{add_name}' ya está en el radar.")
+                else:
+                    custom = add_custom_method(custom, method_id, add_name, add_fiat, sel_pm, exchange=exchange_name)
+                    save_custom_methods(custom)
+                    st.session_state["custom_methods"] = custom
+                    st.success(f"✅ '{add_name}' agregado. Presioná **Actualizar** para incluirlo en el análisis.")
+                    st.rerun()
+
+        # Métodos custom activos
+        custom_active = st.session_state.get("custom_methods", [])
+        if custom_active:
+            st.divider()
+            st.markdown("**Métodos personalizados activos**")
+            header = st.columns([3, 1, 2, 1])
+            header[0].markdown("**Método**")
+            header[1].markdown("**Fiat**")
+            header[2].markdown("**ID Binance**")
+            header[3].markdown("")
+            to_delete = None
+            for i, m in enumerate(custom_active):
+                cols = st.columns([3, 1, 2, 1])
+                cols[0].write(m["human_name"])
+                cols[1].write(m["fiat"])
+                cols[2].write(m["_payment_id"])
+                if cols[3].button("🗑️", key=f"del_m_{i}", help=f"Eliminar {m['human_name']}"):
+                    to_delete = i
+            if to_delete is not None:
+                custom_active.pop(to_delete)
+                save_custom_methods(custom_active)
+                st.session_state["custom_methods"] = custom_active
+                st.rerun()
+            if st.button("🗑️ Eliminar todos los personalizados", key="del_custom"):
+                st.session_state["custom_methods"] = []
+                save_custom_methods([])
+                st.rerun()
+
+
+
+main()
