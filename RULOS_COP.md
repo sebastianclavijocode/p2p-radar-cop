@@ -53,3 +53,21 @@ En Streamlit Cloud, conserva el repositorio, rama y archivo de entrada existente
 - https://bybit-exchange.github.io/docs/p2p/guide
 
 Se conservan las funciones y atribuciones del proyecto original.
+
+
+## Actualización: Bybit oficial y otras monedas
+
+Yo publico permite seleccionar USDT, USDC, BTC y ETH. Cambiar moneda o exchange invalida los resultados anteriores. Bybit consulta anuncios COP con todos los métodos; exige revisar métodos de los anuncios y usa el filtro de anunciantes VA/BA cuando está activo. Consulta una página de hasta 300 anuncios, no todo el mercado.
+
+Configura en Streamlit Settings → Secrets (fuera de GitHub), usando claves HMAC de tu cuenta anunciante con permisos de consulta P2P:
+
+```toml
+BYBIT_API_KEY = "tu_clave"
+BYBIT_API_SECRET = "tu_secreto"
+```
+
+El adaptador solo llama POST /v5/p2p/item/online, firma el cuerpo y no envía operaciones. Los códigos de error no se confunden con un mercado vacío. No se muestran claves ni respuestas de autenticación en pantalla. Un HTTP 403 desde el alojamiento puede persistir incluso con claves válidas; requiere resolver la disponibilidad del servidor con Bybit, no cambiar dominios para eludir restricciones.
+
+Rulos permite BTC, ETH, SOL y USDC como monedas intermedias, además del puente USDT/COP. Los pares que no respondan se reportan como no disponibles. No asume paridad entre stablecoins. Redes sugeridas editables; costos y mínimos deben completarse explícitamente. Filas incompletas se excluyen sin bloquear las válidas. Las tablas y KPI usan la unidad seleccionada. Hold y calculadora se identifican expresamente como herramientas independientes USDT/COP; tarjetas heredadas de tarifa fija solo aplican a Binance USDT.
+
+Referencias: https://bybit-exchange.github.io/docs/p2p/guide y https://bybit-exchange.github.io/docs/p2p/ad/online-ad-list
