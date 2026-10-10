@@ -534,18 +534,56 @@ def build_taker_cards_html(taker_opportunities: list) -> str:
         gan_cfg  = t["ganancia_cop"]
         cap_cfg  = t["capital"]
         usdt_cfg = t["cantidad_usdt"]
-        dentro   = t.get("dentro_limites", False)
+        dentro        = t.get("dentro_limites", False)
+        tt_posible    = t.get("taker_taker_posible", True)
+        hibrido_pos   = t.get("hibrido_posible", False)
+        hibrido_pct   = t.get("hibrido_pct", 0)
+        maker_sell    = t.get("maker_sell_price", t["taker_sell"])
         buy_min  = t.get("buy_min", 0)
         buy_max  = t.get("buy_max", 0)
         sell_min = t.get("sell_min", 0)
         sell_max = t.get("sell_max", 0)
-        lim_color  = "rgba(0,214,143,0.08)"  if dentro else "rgba(255,68,68,0.08)"
-        lim_border = "rgba(0,214,143,0.25)"  if dentro else "rgba(255,68,68,0.25)"
-        lim_text   = "#00d68f" if dentro else "#ff4444"
-        lim_msg    = "✅ Capital dentro de límites — podés operar" if dentro else "⚠️ Capital fuera de límites"
-        gan_color  = "00d68f" if gan_real > 0 else "ff4444"
+        gan_color = "00d68f" if gan_real > 0 else "ff4444"
+
+        # Badge de tipo de operación
+        if not tt_posible:
+            badge_bg   = "rgba(255,68,68,0.15)"
+            badge_bord = "rgba(255,68,68,0.4)"
+            badge_col  = "#ff6b6b"
+            badge_txt  = "❌ Taker-Taker NO operable — límites incompatibles"
+        elif dentro:
+            badge_bg   = "rgba(0,214,143,0.1)"
+            badge_bord = "rgba(0,214,143,0.35)"
+            badge_col  = "#00d68f"
+            badge_txt  = "✅ Taker-Taker operable con tu capital"
+        else:
+            badge_bg   = "rgba(255,140,0,0.1)"
+            badge_bord = "rgba(255,140,0,0.35)"
+            badge_col  = "#ff8c00"
+            badge_txt  = "⚠️ Tu capital no entra en ambos límites"
+
+        hibrido_html = ""
+        if hibrido_pos:
+            hibrido_html = f"""
+  <div style="margin-top:10px;padding:10px 14px;border-radius:8px;
+    background:rgba(100,180,255,0.08);border:1px solid rgba(100,180,255,0.25);">
+    <div style="font-size:9px;color:rgba(100,180,255,0.8);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px;">
+      💡 Alternativa: Taker-Maker (comprar barato ahora, vender como maker)
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;">
+      <span style="color:rgba(255,255,255,0.6);">
+        Comprás taker a <b style="color:#00d68f">{t['taker_buy']:,.2f}</b> →
+        Publicás anuncio maker a ~<b style="color:#4fc3f7">{maker_sell:,.2f}</b>
+      </span>
+      <span style="font-size:14px;font-weight:800;color:#4fc3f7;">+{hibrido_pct:.3f}%</span>
+    </div>
+    <div style="font-size:10px;color:rgba(255,255,255,0.3);margin-top:4px;">
+      No es arbitraje instantáneo — dependés de que llegue un comprador a tu anuncio
+    </div>
+  </div>"""
+
         cards.append(f"""<div style="background:linear-gradient(135deg,rgba(255,140,0,0.12),rgba(255,100,0,0.06));border:1px solid rgba(255,140,0,0.45);border-left:4px solid #ff8c00;border-radius:14px;padding:16px 20px;margin-bottom:14px;">
-  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;">
     <div>
       <div style="font-size:13px;font-weight:800;color:#fff;">🟠 {t['method_human']}</div>
       <div style="font-size:10px;color:rgba(255,255,255,0.45);margin-top:2px;">{fiat} / {asset} · TAKER-TAKER (sin anuncio)</div>
@@ -555,6 +593,7 @@ def build_taker_cards_html(taker_opportunities: list) -> str:
       <div style="font-size:9px;color:rgba(255,140,0,0.6);text-transform:uppercase;">spread bruto</div>
     </div>
   </div>
+  <div style="padding:6px 10px;border-radius:6px;background:{badge_bg};border:1px solid {badge_bord};font-size:11px;font-weight:700;color:{badge_col};margin-bottom:12px;">{badge_txt}</div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
     <div style="background:rgba(0,200,100,0.08);border:1px solid rgba(0,200,100,0.2);border-radius:8px;padding:10px 12px;">
       <div style="font-size:9px;color:rgba(255,255,255,0.4);text-transform:uppercase;margin-bottom:4px;">📗 Comprás directamente</div>
@@ -586,11 +625,7 @@ def build_taker_cards_html(taker_opportunities: list) -> str:
         <div style="font-size:9px;color:rgba(255,255,255,0.3);">{cap_cfg:,.0f} {fiat} · {usdt_cfg:.1f} USDT</div>
       </div>
     </div>
-  </div>
-  <div style="padding:8px 10px;border-radius:8px;background:{lim_color};border:1px solid {lim_border};font-size:10px;display:flex;justify-content:space-between;align-items:center;">
-    <span style="color:{lim_text};font-weight:700;">{lim_msg}</span>
-    <span style="color:rgba(255,255,255,0.35);">Cuello de botella: {min(buy_max,sell_max):,.0f} {fiat}</span>
-  </div>
+  </div>{hibrido_html}
 </div>""")
 
     body = "\n".join(cards)
