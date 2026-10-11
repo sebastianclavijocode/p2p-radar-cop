@@ -87,3 +87,22 @@ def test_slippage_and_negative_routes_are_not_hidden():
     result=find_routes(edges,1000000,now=NOW,slippage_pct=1)
     assert result[0].final == 980100
     assert result[0].profit == -19900
+
+
+def test_exclusions_apply_to_intermediate_exchange_and_before_limit():
+    edges=[trade('A','COP','USDT',4000),transfer('A','OKX','USDT'),trade('OKX','USDT','COP',4500,'sell'),
+           transfer('A','B','USDT'),trade('B','USDT','COP',4400,'sell')]
+    result=find_routes(edges,1000000,now=NOW,limit=1,excluded_venues=['OKX'])
+    assert len(result)==1 and result[0].venues==['A','B']
+    assert find_routes(edges,1000000,now=NOW,excluded_venues=['A'])==[]
+
+
+def test_triangular_cop_uses_crypto_exit_and_costs():
+    from core.routes import strategy
+    edges=[trade('A','COP','USDT',4000),trade('A','USDT','BTC',100),
+           transfer('A','B','BTC',.1),trade('B','BTC','COP',440000,'sell')]
+    result=find_routes(edges,1000000,now=NOW,strategies=['Triangular COP'])
+    assert len(result)==1 and strategy(result[0])=='Triangular COP'
+    assert result[0].final==1056000
+    assert find_routes(edges,1000000,now=NOW,strategies=['Compra y venta directa'])==[]
+    assert find_routes(edges,1000000,now=NOW,strategies=[])==[]
