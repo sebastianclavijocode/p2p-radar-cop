@@ -8,6 +8,7 @@ import pandas as pd
 import streamlit as st
 from core.routes import Edge, find_routes, number
 from exchanges.live_routes import collect
+from exchanges import criptoya
 
 
 def cop(value):
@@ -17,6 +18,23 @@ def cop(value):
 @st.cache_data(ttl=30, show_spinner=False)
 def snapshot(fees, methods, p2p, assets):
     return collect(fees, methods, p2p, assets)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def comparison_snapshot(asset, volume):
+    try:
+        return criptoya.fetch_quotes(asset, volume), ''
+    except Exception as exc:
+        status = getattr(getattr(exc,'response',None),'status_code',None)
+        return [], f'CriptoYa no disponible · HTTP {status}' if status else 'CriptoYa no disponible en esta consulta'
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def withdrawal_snapshot():
+    try:
+        return criptoya.fetch_fees(), ''
+    except Exception:
+        return {}, 'No fue posible consultar comisiones de retiro; se cargó el perfil inicial editable.'
 
 
 STYLE = """<style>
@@ -65,17 +83,46 @@ def route_card(route, best=False):
         f'<span>{cop(route.profit)}<br><small>Saldo final {cop(route.final)}</small></span></div></article>')
 
 
-def default_transfers():
-    # Published Bitso withdrawal fees, retrieved 2026-10-11; not account verification.
-    bitso = {'USDT': 3.4, 'BTC': 0.00001543, 'ETH': 0.00000361, 'SOL': 0.0016}
+def default_transfers(fee_data=None):
+    fee_data = fee_data or {}
     networks = {'USDT':'Tron (TRC20)', 'BTC':'Bitcoin', 'ETH':'Ethereum', 'SOL':'Solana', 'USDC':'Ethereum (ERC20)'}
-    return pd.DataFrame([
-        {'Origen': a, 'Destino': b, 'Activo': asset, 'Red': networks[asset],
-         'Comisión en activo': bitso.get(asset, 0.0) if a == 'Bitso' else 0.0,
-         'Mínimo de retiro': 0.0, 'Confirmada': False,
-         'Referencia': 'Bitso · tarifa publicada 11/10/2026; mínimo inicial 0' if a == 'Bitso' and asset in bitso else 'Valores iniciales 0 · revisar en tu cuenta'}
-        for asset in networks for a, b in permutations(('Binance', 'Bitso', 'Bybit', 'OKX', 'MEXC'), 2)
-    ])
+    rows=[]
+    for asset in networks:
+        for a,b in permutations(criptoya.VENUE_KEYS,2):
+            origin=fee_data.get(criptoya.VENUE_KEYS[a],{}).get(asset,{})
+            target=fee_data.get(criptoya.VENUE_KEYS[b],{}).get(asset,{})
+            if not isinstance(origin,dict): origin={}
+            if not isinstance(target,dict): target={}
+            options=[]
+            for chain in set(origin).intersection(target):
+                try:
+                    rate=number(origin[chain]['withdraw'])
+                    if rate>=0: options.append((rate,chain))
+                except (KeyError,ValueError,TypeError,ArithmeticError): pass
+            rate,chain=min(options) if options else (0.0,networks[asset])
+            stamp=origin.get(chain,{}).get('time',0)
+            try:
+                date=datetime.fromtimestamp(float(stamp),ZoneInfo('America/Bogota')).strftime('%d/%m/%Y %H:%M') if stamp else 'sin fecha del proveedor'
+            except (ValueError,TypeError,OverflowError,OSError):
+                date='sin fecha válida del proveedor'
+            source=f'CriptoYa · retiro {date}; mínimo inicial 0' if options else 'Valores iniciales 0 · revisar en tu cuenta'
+            rows.append({'Origen':a,'Destino':b,'Activo':asset,'Red':chain,'Comisión en activo':float(rate),
+                         'Mínimo de retiro':0.0,'Confirmada':False,'Referencia':source})
+    return pd.DataFrame(rows)
+
+
+def comparison_html(rows, asset):
+    table=[]
+    for row in rows:
+        stamp=datetime.fromtimestamp(row['timestamp'],ZoneInfo('America/Bogota')).strftime('%H:%M:%S')
+        fmt=lambda x: '$ '+f'{x:,.2f}'.replace(',','X').replace('.',',').replace('X','.')
+        table.append(f'<tr><td>{escape(row["Plataforma"])}</td><td><span class="coin-badge">{escape(asset)}</span></td><td class="bid">{fmt(row["Venta COP"])}</td><td>{fmt(row["Compra COP"])}</td><td>{row["Spread %"]:+.2f}%</td><td>{stamp}</td></tr>')
+    return '<div class="market-wrap"><table class="market-table"><thead><tr><th>PLATAFORMA</th><th>ACTIVO</th><th>VENTA COP</th><th>COMPRA COP</th><th>SPREAD</th><th>HORA COLOMBIA</th></tr></thead><tbody>'+''.join(table)+'</tbody></table></div>'
+
+
+def comparison_tiles(rows):
+    fmt=lambda x: '$ '+f'{x:,.2f}'.replace(',','X').replace('.',',').replace('X','.')
+    return '<div class="quote-grid usdt-grid">'+''.join(f'<a class="quote-box" href="https://criptoya.com/co#{escape(row["Activo"])}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;display:block"><div class="quote-label">{escape(row["Plataforma"])} · {escape(row["Activo"])}</div><div class="quote-value">{fmt(row["Compra COP"])}</div><div class="quote-note">Venta {fmt(row["Venta COP"])}<br>CriptoYa · COP</div></a>' for row in rows[:5])+'</div>'
 
 
 def usdt_tiles(edges, manual=None):
@@ -107,6 +154,8 @@ def render():
         brand, filters, simulation, refresh_col, views = st.columns([3.6, 1.1, 1.2, .65, 1.35], vertical_alignment='center')
         brand.markdown('<div class="brand">⇄ Arbitraje<span>COP</span><small>COLOMBIA</small></div>', unsafe_allow_html=True)
         with filters.popover('Filtros', width='stretch'):
+            quote_asset = st.selectbox('Activo de la comparación COP', ['USDT','USDC','BTC','ETH','SOL'])
+            quote_volume = st.number_input('Volumen de referencia en cripto',min_value=0.000001, value=1000.0 if quote_asset in ('USDT','USDC') else 0.1, key='quote-volume-'+quote_asset, format='%.6f')
             assets = st.multiselect('Criptomonedas del recorrido', ['BTC','ETH','SOL','USDC'], default=['BTC'])
             st.caption('USDT conecta la entrada y salida en COP.')
             max_venues = st.selectbox('Máximo de exchanges', [2,3], index=1)
@@ -124,10 +173,12 @@ def render():
             costs_ok = st.checkbox('Confirmé mis comisiones y otros costos')
         if refresh_col.button('↻', help='Actualizar cotizaciones', width='stretch'):
             snapshot.clear()
+            comparison_snapshot.clear()
+            withdrawal_snapshot.clear()
         views.button('P2P', help='Abrir Radar original · Yo publico', width='stretch', on_click=lambda: st.session_state.update({'radar-view':'Radar original · Yo publico'}))
     live_slot = st.container()
-    with st.expander('Otras plataformas en Colombia · comparación COP', expanded=False):
-        st.caption('Belo y Lemon ofrecen conversión con COP; MEXC y OKX ofrecen P2P COP. Sin una fuente automática, puedes registrar el precio que ves en tu cuenta. Estas cotizaciones manuales se comparan aquí y no alimentan rutas ni se presentan como API.')
+    with st.expander('Cotizaciones manuales · respaldo opcional', expanded=False):
+        st.caption('La comparación principal usa CriptoYa automáticamente. Aquí puedes registrar un precio de tu cuenta como referencia adicional; estas entradas manuales no alimentan rutas.')
         st.markdown('[Belo Colombia](https://www.belo.app/blog/como-cargar-pesos-colombianos-en-tu-cuenta-digital) · [Lemon Colombia](https://www.wiki.lemon.me/es-co/novedades/comprar-dolar-digital-colombia) · [MEXC COP](https://www.mexc.com/buy-crypto/p2p/buy/USDT/COP) · [OKX COP](https://www.okx.com/es-es/p2p-markets/cop/buy-usdt)')
         manual = st.data_editor(pd.DataFrame([{'Plataforma':v,'Activo':'USDC' if v=='ARQ' else 'USDT','Compra COP':None,'Venta COP':None} for v in ['MEXC P2P','OKX P2P','Bybit P2P','Belo','Lemon Cash','ARQ','Fiwind','Cocos Crypto','Buenbit','Ripio','Satoshi Tango','Astropay','Tienda Crypto','Decrypto',"Let’s Bit"]]), hide_index=True, width='stretch', key='manual-cop-quotes', disabled=['Plataforma'], column_config={'Compra COP':st.column_config.NumberColumn(min_value=0.01),'Venta COP':st.column_config.NumberColumn(min_value=0.01),'Activo':st.column_config.SelectboxColumn(options=['USDT','USDC'])})
         st.caption('En las demás plataformas de la lista debes comprobar primero disponibilidad de COP y requisitos de tu cuenta.')
@@ -142,9 +193,28 @@ def render():
         st.caption('Perfil inicial incluido: redes sugeridas, comisiones y mínimos editables. Confirmar todas incluye las monedas seleccionadas.')
         st.caption('Red debe coincidir en retiro y depósito. Confirmada significa que tú revisaste disponibilidad, '
                    'comisión y mínimo hoy; la aplicación no consulta tu cuenta. Sin confirmación no se usa la transferencia.')
-        st.warning('Los ceros son valores iniciales de simulación, no tarifas verificadas. Bitso incluye tarifas publicadas el 11/10/2026. Revisa retiro, depósito y mínimos antes de confirmar; las tarifas pueden cambiar.')
-        st.markdown('[Tarifas publicadas por Bitso](https://bitso.com/fees/transactions) · [Redes Bitso](https://support.bitso.com/hc/en-us/articles/4419901801748-Which-network-to-use-to-deposit-or-withdraw-crypto-on-Bitso) · [Retiros Bybit](https://www.bybit.com/en-GB/help-center/article/Bybit-Fees-You-Need-to-Know) · [Tarifas Binance](https://www.binance.com/en/fee/cryptoFee) · [Tarifas OKX](https://www.okx.com/fees)')
-        transfer_frame = default_transfers()
+        fee_data,fee_error=withdrawal_snapshot()
+        if fee_error: st.warning(fee_error)
+        st.info('Comisiones de retiro rellenadas desde CriptoYa. Se elige la red de menor costo publicada en ambas plataformas; debes verificar también depósito y disponibilidad. La API no informa mínimos: quedan en 0 como valor inicial editable, no como mínimo verificado. Las filas sin tarifa publicada usan 0 y están identificadas.')
+        st.markdown('[Fuente de comisiones: CriptoYa](https://docs.criptoya.com/colombia/operations/get-fees.html) · [Tarifas Bitso](https://bitso.com/fees/transactions) · [Redes Bitso](https://support.bitso.com/hc/en-us/articles/4419901801748-Which-network-to-use-to-deposit-or-withdraw-crypto-on-Bitso)')
+        with st.expander('Comisiones publicadas · redes de todas las plataformas'):
+            published=[]
+            for provider,name in criptoya.NAMES.items():
+                for coin in ['USDT']+assets:
+                    for chain,entry in fee_data.get(provider,{}).get(coin,{}).items():
+                        try:
+                            fee=number(entry['withdraw'])
+                            if fee<0: continue
+                            stamp=float(entry.get('time',0))
+                            date=datetime.fromtimestamp(stamp,ZoneInfo('America/Bogota')).strftime('%d/%m/%Y %H:%M') if stamp else 'Sin fecha'
+                            published.append({'Plataforma':name,'Activo':coin,'Red':chain,'Comisión en activo':float(fee),'Fecha del proveedor':date})
+                        except (KeyError,ValueError,TypeError,ArithmeticError,OSError): continue
+            if published:
+                st.dataframe(pd.DataFrame(published),hide_index=True,width='stretch')
+            st.caption('Fuente: CriptoYa. La presencia de una red de retiro no certifica que el depósito esté habilitado en tu cuenta. Las fechas antiguas o ausentes requieren revisión.')
+        transfer_frame = default_transfers(fee_data)
+        if 'rulo-transfer-base' not in st.session_state:
+            st.session_state['rulo-transfer-base'] = transfer_frame.copy(deep=True)
         if 'rulo-transfer-base' in st.session_state:
             old = st.session_state['rulo-transfer-base'].set_index(['Origen','Destino','Activo'])
             merged = transfer_frame.set_index(['Origen','Destino','Activo'])
@@ -213,6 +283,7 @@ def render():
     def live_panel():
         with st.spinner('Actualizando mercado…'):
             edges, statuses, received = snapshot(fees, tuple(methods), p2p, tuple(assets))
+            comparisons,comparison_error=comparison_snapshot(quote_asset,quote_volume)
         now = time.time()
         fresh = [e for e in edges if -5 <= now-e.observed <= 90]
         ready = costs_ok and bool(transfers)
@@ -224,8 +295,17 @@ def render():
         hero_note = 'Incluye los costos y las redes que configuraste.' if ready else 'Abre Simular para confirmar costos y configura tus transferencias al final de esta página.'
         st.markdown(f'<div class="radar-hero"><div class="hero-eyebrow">{hero_title}</div><div class="hero-route">{hero_route}</div><div class="hero-note">{hero_note}</div></div>', unsafe_allow_html=True)
         source_count = sum(s['Estado']=='OK' for s in statuses)
-        st.markdown(usdt_tiles(fresh, valid_manual), unsafe_allow_html=True)
-        st.caption(f'Capital {cop(capital)} · {source_count}/{len(statuses)} fuentes · Hasta {max_venues} exchanges · OKX y MEXC tienen cotizaciones spot automáticas. Sus precios P2P COP aparecen como pendientes hasta conectar una fuente.')
+        st.markdown(comparison_tiles(comparisons) if comparisons else usdt_tiles(fresh, valid_manual), unsafe_allow_html=True)
+        st.caption(f'Capital {cop(capital)} · {source_count}/{len(statuses)} fuentes directas · Hasta {max_venues} exchanges · {len(comparisons)} plataformas en comparación COP.')
+        st.markdown(f'<div class="section-title"><span class="section-icon">≡</span>{escape(quote_asset)} en Colombia · compra y venta</div>',unsafe_allow_html=True)
+        if comparison_error: st.warning(comparison_error)
+        if comparisons:
+            st.markdown(comparison_html(comparisons,quote_asset),unsafe_allow_html=True)
+            st.caption(f'Fuente: CriptoYa · Volumen consultado {quote_volume:g} {quote_asset} · Campos totalAsk / totalBid · Precios con antigüedad máxima de 3 minutos. Spread = venta / compra − 1. Estas referencias no incluyen profundidad, límites del anuncio ni método de pago y no alimentan el motor de rutas.')
+            st.markdown('[Ver fuente y redes por plataforma](https://criptoya.com/co#USDT) · [Documentación de la API](https://docs.criptoya.com/colombia/)')
+            st.download_button('Descargar comparación COP',pd.DataFrame(comparisons).drop(columns=['id','timestamp']).to_csv(index=False).encode('utf-8-sig'),file_name='cotizaciones-cop.csv',mime='text/csv')
+        elif not comparison_error:
+            st.info('Sin cotizaciones vigentes para este activo y volumen.')
         export=[]
         for venues, icon, title in [(2,'⇄','Arbitrajes entre exchanges'),(3,'↻','Rulos de tres exchanges')]:
             if venues>max_venues: continue
@@ -240,7 +320,7 @@ def render():
                     detail=[{'Paso':j+1,'Operación':e.label,'Desde':' / '.join(e.source),'Hasta':' / '.join(e.target),'Saldo antes':f'{r.balances[j]:.8f}','Saldo después':f'{r.balances[j+1]:.8f}','Comisión %':str(e.fee_pct),'Costo fijo':str(e.fixed)} for j,e in enumerate(r.steps)]
                     st.dataframe(pd.DataFrame(detail),hide_index=True,width='stretch')
                 export.append({'Ruta':route_title(r),'Capital_COP':str(r.capital),'Final_COP':str(r.final),'Resultado_COP':str(r.profit),'Porcentaje':str(r.pct)})
-        st.markdown('<div class="section-title"><span class="section-icon">≡</span>Cotizaciones por exchange</div>',unsafe_allow_html=True)
+        st.markdown('<div class="section-title"><span class="section-icon">≡</span>Mercados directos utilizados por los rulos</div>',unsafe_allow_html=True)
         markets={}
         for e in fresh:
             if e.kind not in ('buy','sell'):continue
