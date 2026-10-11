@@ -15,8 +15,6 @@ label, input, button, select, textarea, td, th, li, a {
 }
 
 /* Ocultar íconos que se renderizan como texto literal */
-[data-testid="stSidebarCollapseButton"] span,
-[data-testid="stSidebarNavCollapseButton"] span,
 [data-testid="stExpanderToggleIcon"],
 [data-testid="stExpanderToggleIcon"] span {
   display: none !important;
@@ -34,7 +32,8 @@ details > summary > span {
 
 /* ── Ocultar chrome de Streamlit ── */
 #MainMenu { visibility: hidden !important; }
-header[data-testid="stHeader"] { display: none !important; }
+header[data-testid="stHeader"] { background: transparent !important; }
+[data-testid="stSidebarCollapsedControl"] { display: flex !important; visibility: visible !important; }
 [data-testid="stToolbar"]      { display: none !important; }
 footer                          { display: none !important; }
 [data-testid="stDecoration"]   { display: none !important; }

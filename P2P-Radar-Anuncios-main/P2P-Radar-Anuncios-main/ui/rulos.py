@@ -35,6 +35,8 @@ button[kind="secondary"]:hover,[data-testid="stPopoverButton"]:hover{border-colo
 .radar-hero{border:1px solid #40384b;background:linear-gradient(110deg,#21192c,#172137);border-radius:18px;padding:22px 24px;margin:4px 0 18px}
 .hero-eyebrow{color:#e8c257;font-weight:750;font-size:16px;margin-bottom:9px}.hero-route{color:#30d6a3;font-weight:750;font-size:15px}.hero-note{color:#99a6be;font-size:12px;margin-top:8px}
 .quote-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin:0 0 22px}
+.usdt-grid{grid-template-columns:repeat(5,minmax(0,1fr))}.usdt-grid .quote-value{font-size:20px}
+@media(max-width:760px){.quote-grid.usdt-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .quote-box{border:1px solid #292c3b;background:linear-gradient(125deg,#1c1b2b,#151b27);border-radius:15px;padding:18px 10px;text-align:center;min-height:106px}
 .quote-label{font-size:10px;letter-spacing:.5px;color:#97a3b8;font-weight:700;text-transform:uppercase}.quote-value{font-size:23px;font-weight:800;letter-spacing:-.5px;color:#2ed2a3;margin:5px 0}.quote-note{font-size:11px;color:#8995ac}.blue{color:#4fa5fa}.purple{color:#b278ee}.cyan{color:#2cc9e8}.amber{color:#edb54c}
 .section-title{font-size:17px;font-weight:750;margin:22px 0 14px;display:flex;align-items:center;gap:11px}.section-icon{width:32px;height:32px;border-radius:10px;background:#22203a;color:#81a1fd;display:inline-grid;place-items:center}.section-count{margin-left:auto;color:#697b94;font-size:11px;font-weight:500}
@@ -63,6 +65,42 @@ def route_card(route, best=False):
         f'<span>{cop(route.profit)}<br><small>Saldo final {cop(route.final)}</small></span></div></article>')
 
 
+def default_transfers():
+    # Published Bitso withdrawal fees, retrieved 2026-10-11; not account verification.
+    bitso = {'USDT': 3.4, 'BTC': 0.00001543, 'ETH': 0.00000361, 'SOL': 0.0016}
+    networks = {'USDT':'Tron (TRC20)', 'BTC':'Bitcoin', 'ETH':'Ethereum', 'SOL':'Solana', 'USDC':'Ethereum (ERC20)'}
+    return pd.DataFrame([
+        {'Origen': a, 'Destino': b, 'Activo': asset, 'Red': networks[asset],
+         'Comisión en activo': bitso.get(asset, 0.0) if a == 'Bitso' else 0.0,
+         'Mínimo de retiro': 0.0, 'Confirmada': False,
+         'Referencia': 'Bitso · tarifa publicada 11/10/2026; mínimo inicial 0' if a == 'Bitso' and asset in bitso else 'Valores iniciales 0 · revisar en tu cuenta'}
+        for asset in networks for a, b in permutations(('Binance', 'Bitso', 'Bybit', 'OKX', 'MEXC'), 2)
+    ])
+
+
+def usdt_tiles(edges, manual=None):
+    links = {'Binance':'https://p2p.binance.com/es/trade/all-payments/USDT?fiat=COP',
+             'Bitso':'https://bitso.com/', 'Bybit':'https://www.bybit.com/fiat/trade/otc/?actionType=1&token=USDT&fiat=COP',
+             'OKX':'https://www.okx.com/es-es/p2p-markets/cop/buy-usdt',
+             'MEXC':'https://www.mexc.com/buy-crypto/p2p/buy/USDT/COP'}
+    cards = []
+    for venue, link in links.items():
+        buy = [e for e in edges if e.source == (venue,'COP') and e.target == (venue,'USDT')]
+        sell = [e for e in edges if e.source == (venue,'USDT') and e.target == (venue,'COP')]
+        fmt = lambda v: ('$ '+f'{float(v):,.2f}'.replace(',','X').replace('.',',').replace('X','.')) if v is not None else '—'
+        ask = min((e.levels[0][0] for e in buy), default=None)
+        bid = max((e.levels[0][0] for e in sell), default=None)
+        note = 'COP / USDT · spot' if venue == 'Bitso' else 'COP / USDT · P2P'
+        if ask is None: note = 'Cotización COP no conectada'
+        if ask is None and manual is not None:
+            entry = manual[(manual['Plataforma'] == venue + ' P2P') & (manual['Activo'] == 'USDT')]
+            if not entry.empty:
+                ask, bid = entry.iloc[0]['Compra COP'], entry.iloc[0]['Venta COP']
+                note = 'COP / USDT · entrada manual'
+        cards.append(f'<a class="quote-box" href="{escape(link,quote=True)}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;display:block"><div class="quote-label">{venue} · comprar USDT</div><div class="quote-value">{fmt(ask)}</div><div class="quote-note">Venta {fmt(bid)}<br>{note}</div></a>')
+    return '<div class="quote-grid usdt-grid">'+''.join(cards)+'</div>'
+
+
 def render():
     st.markdown(STYLE, unsafe_allow_html=True)
     with st.container(key='radar-toolbar'):
@@ -82,29 +120,40 @@ def render():
             slippage = st.number_input('Margen adicional por cambio de precio (%) por conversión', min_value=0.0, max_value=10.0, value=0.1, step=0.05)
             st.caption('Incluye profundidad del libro. Ajusta estas tarifas a tu cuenta.')
             fees = {name: st.number_input(name, min_value=0.0, max_value=20.0, value=default, step=0.01, key='rulo-fee-' + name)
-                    for name, default in [('Bitso',0.65),('Binance',0.10),('Bybit',0.10),('Binance P2P',0.0)]}
+                    for name, default in [('Bitso',0.65),('Binance',0.10),('Bybit',0.10),('OKX',0.10),('MEXC',0.10),('Binance P2P',0.0)]}
             costs_ok = st.checkbox('Confirmé mis comisiones y otros costos')
         if refresh_col.button('↻', help='Actualizar cotizaciones', width='stretch'):
             snapshot.clear()
         views.button('P2P', help='Abrir Radar original · Yo publico', width='stretch', on_click=lambda: st.session_state.update({'radar-view':'Radar original · Yo publico'}))
     live_slot = st.container()
+    with st.expander('Otras plataformas en Colombia · comparación COP', expanded=False):
+        st.caption('Belo y Lemon ofrecen conversión con COP; MEXC y OKX ofrecen P2P COP. Sin una fuente automática, puedes registrar el precio que ves en tu cuenta. Estas cotizaciones manuales se comparan aquí y no alimentan rutas ni se presentan como API.')
+        st.markdown('[Belo Colombia](https://www.belo.app/blog/como-cargar-pesos-colombianos-en-tu-cuenta-digital) · [Lemon Colombia](https://www.wiki.lemon.me/es-co/novedades/comprar-dolar-digital-colombia) · [MEXC COP](https://www.mexc.com/buy-crypto/p2p/buy/USDT/COP) · [OKX COP](https://www.okx.com/es-es/p2p-markets/cop/buy-usdt)')
+        manual = st.data_editor(pd.DataFrame([{'Plataforma':v,'Activo':'USDC' if v=='ARQ' else 'USDT','Compra COP':None,'Venta COP':None} for v in ['MEXC P2P','OKX P2P','Bybit P2P','Belo','Lemon Cash','ARQ','Fiwind','Cocos Crypto','Buenbit','Ripio','Satoshi Tango','Astropay','Tienda Crypto','Decrypto',"Let’s Bit"]]), hide_index=True, width='stretch', key='manual-cop-quotes', disabled=['Plataforma'], column_config={'Compra COP':st.column_config.NumberColumn(min_value=0.01),'Venta COP':st.column_config.NumberColumn(min_value=0.01),'Activo':st.column_config.SelectboxColumn(options=['USDT','USDC'])})
+        st.caption('En las demás plataformas de la lista debes comprobar primero disponibilidad de COP y requisitos de tu cuenta.')
+        valid_manual = manual.dropna(subset=['Compra COP','Venta COP']).copy()
+        if not valid_manual.empty:
+            valid_manual = valid_manual[(valid_manual['Compra COP']>0)&(valid_manual['Venta COP']>0)]
+            valid_manual['Spread %']=(valid_manual['Venta COP']/valid_manual['Compra COP']-1)*100
+            st.dataframe(valid_manual.sort_values('Venta COP',ascending=False),hide_index=True,width='stretch')
     network_slot = st.container()
     with network_slot.expander('⚙  Redes y transferencias · configurar', expanded=False):
         st.write('1. Busca la dirección que usarás. 2. Escribe la red compatible en ambas cuentas. 3. Completa comisión y mínimo de retiro. 4. Marca Confirmada solo en esa fila.')
-        st.caption('Puedes confirmar una fila o todas las completas. El botón solo incluye las monedas seleccionadas y no completa costos por ti.')
+        st.caption('Perfil inicial incluido: redes sugeridas, comisiones y mínimos editables. Confirmar todas incluye las monedas seleccionadas.')
         st.caption('Red debe coincidir en retiro y depósito. Confirmada significa que tú revisaste disponibilidad, '
                    'comisión y mínimo hoy; la aplicación no consulta tu cuenta. Sin confirmación no se usa la transferencia.')
-        rows = [{'Origen': a, 'Destino': b, 'Activo': asset, 'Red': {'USDT':'Tron (TRC20)', 'BTC':'Bitcoin', 'ETH':'Ethereum', 'SOL':'Solana', 'USDC':'Ethereum (ERC20)'}[asset], 'Comisión en activo': None,
-                 'Mínimo de retiro': None, 'Confirmada': False}
-                for asset in ('USDT', 'BTC', 'ETH', 'SOL', 'USDC') for a, b in permutations(('Binance', 'Bitso', 'Bybit'), 2)]
-        st.info('Redes sugeridas, aún no verificadas en tus cuentas. Confirma que existan en retiro y depósito; completa comisión y mínimo. No se supone costo cero.')
-        st.markdown('[Redes publicadas por Bitso](https://support.bitso.com/hc/en-us/articles/4419901801748-Which-network-to-use-to-deposit-or-withdraw-crypto-on-Bitso) · Verifica también el otro exchange.')
-        transfer_frame = pd.DataFrame(rows).astype({'Comisión en activo': 'float64', 'Mínimo de retiro':'float64'})
-        transfer_frame = st.session_state.get('rulo-transfer-base', transfer_frame)
+        st.warning('Los ceros son valores iniciales de simulación, no tarifas verificadas. Bitso incluye tarifas publicadas el 11/10/2026. Revisa retiro, depósito y mínimos antes de confirmar; las tarifas pueden cambiar.')
+        st.markdown('[Tarifas publicadas por Bitso](https://bitso.com/fees/transactions) · [Redes Bitso](https://support.bitso.com/hc/en-us/articles/4419901801748-Which-network-to-use-to-deposit-or-withdraw-crypto-on-Bitso) · [Retiros Bybit](https://www.bybit.com/en-GB/help-center/article/Bybit-Fees-You-Need-to-Know) · [Tarifas Binance](https://www.binance.com/en/fee/cryptoFee) · [Tarifas OKX](https://www.okx.com/fees)')
+        transfer_frame = default_transfers()
+        if 'rulo-transfer-base' in st.session_state:
+            old = st.session_state['rulo-transfer-base'].set_index(['Origen','Destino','Activo'])
+            merged = transfer_frame.set_index(['Origen','Destino','Activo'])
+            merged.update(old)
+            transfer_frame = merged.reset_index()
         revision = st.session_state.get('rulo-transfer-revision', 0)
         editor_key = 'rulo-transfers-v2' if revision == 0 else f'rulo-transfers-bulk-{revision}'
         config = st.data_editor(transfer_frame, hide_index=True, width='stretch',
-            disabled=['Origen', 'Destino', 'Activo'], key=editor_key,
+            disabled=['Origen', 'Destino', 'Activo', 'Referencia'], key=editor_key,
             column_config={'Red': st.column_config.TextColumn(help='Nombre de la misma red en retiro y depósito. No es el nombre del exchange.'), 'Confirmada': st.column_config.CheckboxColumn(help='Marca después de completar red, comisión y mínimo de retiro.'), 'Comisión en activo': st.column_config.NumberColumn(min_value=0.0, format='%.8f'),
                            'Mínimo de retiro': st.column_config.NumberColumn(min_value=0.0, format='%.8f')})
         confirm_col, clear_col = st.columns(2)
@@ -132,7 +181,8 @@ def render():
             st.rerun()
         if 'rulo-transfer-message' in st.session_state:
             st.info(st.session_state.pop('rulo-transfer-message'))
-        st.caption('Para calcular también debes marcar «Confirmé mis comisiones y otros costos» en la barra lateral.')
+        st.download_button('Descargar configuración de redes', config.to_csv(index=False).encode('utf-8-sig'), file_name='redes-rulos-cop.csv', mime='text/csv')
+        st.caption('Para calcular también debes marcar «Confirmé mis comisiones y otros costos» en el botón Simular de arriba.')
         st.caption('La configuración se conserva durante esta sesión. No se envía dinero ni se guardan claves de exchanges.')
 
     transfers, errors = [], []
@@ -173,14 +223,9 @@ def render():
         hero_route = escape(route_title(best)) + f' · {float(best.pct):+.2f}% neto estimado' if best else 'COP → Cripto → COP'
         hero_note = 'Incluye los costos y las redes que configuraste.' if ready else 'Abre Simular para confirmar costos y configura tus transferencias al final de esta página.'
         st.markdown(f'<div class="radar-hero"><div class="hero-eyebrow">{hero_title}</div><div class="hero-route">{hero_route}</div><div class="hero-note">{hero_note}</div></div>', unsafe_allow_html=True)
-        buys = [e for e in fresh if e.source[1]=='COP' and e.target[1]=='USDT']
-        sells = [e for e in fresh if e.target[1]=='COP' and e.source[1]=='USDT']
-        buy = min(buys,key=lambda e:e.levels[0][0]) if buys else None
-        sell = max(sells,key=lambda e:e.levels[0][0]) if sells else None
-        quote_price = lambda edge: ('$ '+f'{float(edge.levels[0][0]):,.2f}'.replace(',','X').replace('.',',').replace('X','.')) if edge else '—'
         source_count = sum(s['Estado']=='OK' for s in statuses)
-        summaries = [('COMPRA USDT',quote_price(buy),buy.source[0] if buy else 'Sin cotización',''),('VENTA USDT',quote_price(sell),sell.source[0] if sell else 'Sin cotización','blue'),('CAPITAL',cop(capital).replace(' COP',''),'Pesos colombianos','purple'),('FUENTES',f'{source_count} / {len(statuses)}','Con respuesta en esta consulta','cyan'),('RECORRIDOS',str(len(routes)) if ready else '—','Hasta '+str(max_venues)+' exchanges','amber')]
-        st.markdown('<div class="quote-grid">'+''.join(f'<div class="quote-box"><div class="quote-label">{a}</div><div class="quote-value {d}">{b}</div><div class="quote-note">{c}</div></div>' for a,b,c,d in summaries)+'</div>',unsafe_allow_html=True)
+        st.markdown(usdt_tiles(fresh, valid_manual), unsafe_allow_html=True)
+        st.caption(f'Capital {cop(capital)} · {source_count}/{len(statuses)} fuentes · Hasta {max_venues} exchanges · OKX y MEXC tienen cotizaciones spot automáticas. Sus precios P2P COP aparecen como pendientes hasta conectar una fuente.')
         export=[]
         for venues, icon, title in [(2,'⇄','Arbitrajes entre exchanges'),(3,'↻','Rulos de tres exchanges')]:
             if venues>max_venues: continue
@@ -211,6 +256,8 @@ def render():
             fmt=lambda v: f'{v:,.4f}' if v is not None else '—'
             spread=(row['bid']/row['ask']-1)*100 if row.get('ask') and row.get('bid') else None
             table.append(f'<tr><td>{escape(venue)}</td><td><span class="coin-badge">{escape(base)} / {escape(quote)}</span></td><td class="bid">{fmt(row.get("bid"))}</td><td>{fmt(row.get("ask"))}</td><td>{f"{spread:+.2f}%" if spread is not None else "—"}</td></tr>')
+        for _, row in valid_manual.iterrows():
+            table.append(f'<tr><td>{escape(row["Plataforma"])} · manual</td><td><span class="coin-badge">{escape(row["Activo"])} / COP</span></td><td class="bid">{row["Venta COP"]:,.2f}</td><td>{row["Compra COP"]:,.2f}</td><td>{row["Spread %"]:+.2f}%</td></tr>')
         st.markdown('<div class="market-wrap"><table class="market-table"><thead><tr><th>EXCHANGE</th><th>PAR</th><th>VENTA / BID</th><th>COMPRA / ASK</th><th>SPREAD</th></tr></thead><tbody>'+''.join(table)+'</tbody></table></div>',unsafe_allow_html=True)
         stamp=datetime.fromtimestamp(received,ZoneInfo('America/Bogota')).strftime('%H:%M:%S')
         st.markdown(f'<div class="radar-status"><span><span class="status-dot">●</span> Última consulta {stamp} · Colombia</span><span>{len(fresh)} cotizaciones vigentes</span></div>',unsafe_allow_html=True)
