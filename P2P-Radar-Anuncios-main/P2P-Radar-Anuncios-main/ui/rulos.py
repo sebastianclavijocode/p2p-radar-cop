@@ -285,6 +285,7 @@ def render():
             edges, statuses, received = snapshot(fees, tuple(methods), p2p, tuple(assets))
             comparisons,comparison_error=comparison_snapshot(quote_asset,quote_volume)
         now = time.time()
+        comparisons = [r for r in comparisons if -5 <= now-r['timestamp'] <= 180]
         fresh = [e for e in edges if -5 <= now-e.observed <= 90]
         ready = costs_ok and bool(transfers)
         routes = find_routes(fresh+transfers, capital, max_venues, cash_cost, slippage, now) if ready else []
