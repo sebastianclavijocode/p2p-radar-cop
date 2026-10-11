@@ -637,6 +637,16 @@ body {
 .al-k { font-size: 10px; color: rgba(255,255,255,0.72); text-transform: uppercase; letter-spacing: 0.4px; font-weight: 600; flex-shrink: 0; }
 .al-v { font-size: 11.5px; color: rgba(255,255,255,0.88); font-weight: 500; text-align: right; max-width: 62%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+@media (max-width: 640px) {
+ .alerts { padding: 0 12px 24px; }
+ .al-body { flex-direction: column; }
+ .al-col { min-width: 0; }
+ .al-col + .al-col { border-left: none; border-top: 1px solid rgba(255,255,255,.05); }
+ .al-v { white-space: normal; overflow-wrap: anywhere; }
+ .al-price { overflow-wrap: anywhere; }
+ .al-head { flex-wrap: wrap; gap: 12px; }
+}
+
 /* Alert footer */
 .al-ft {
     display: flex; align-items: center; flex-wrap: wrap;

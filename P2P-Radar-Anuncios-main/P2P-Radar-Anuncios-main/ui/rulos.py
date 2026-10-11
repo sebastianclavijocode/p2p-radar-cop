@@ -6,7 +6,7 @@ from itertools import permutations
 import time
 import pandas as pd
 import streamlit as st
-from core.routes import Edge, find_routes, number
+from core.routes import Edge, find_routes, number, STRATEGIES, strategy
 from exchanges.live_routes import collect
 from exchanges import criptoya, public_fx
 
@@ -163,6 +163,10 @@ def render():
             quote_volume = st.number_input('Volumen de referencia en cripto',min_value=0.000001, value=1000.0 if quote_asset in ('USDT','USDC') else 0.1, key='quote-volume-'+quote_asset, format='%.6f')
             assets = st.multiselect('Criptomonedas del recorrido', ['BTC','ETH','SOL','USDC'], default=['BTC','ETH','SOL','USDC'])
             st.caption('USDT conecta la entrada y salida en COP.')
+            venue_options=sorted(set(criptoya.VENUE_KEYS)|set(criptoya.NAMES.values())-{'Binance P2P','Bybit P2P','OKX P2P','MEXC P2P','Bitso Alpha'})
+            excluded=st.multiselect('Excluir exchanges de los rulos',venue_options,key='excluded-route-venues')
+            strategies=st.multiselect('Estrategias incluidas',list(STRATEGIES),default=list(STRATEGIES),key='route-strategies')
+            st.caption('Triangular COP: COP → USDT → BTC/ETH/SOL → COP, o recorrido inverso. Las exclusiones se aplican a todos los pasos; no indican una valoración de seguridad del exchange.')
             max_venues = st.selectbox('Máximo de exchanges', [2,3], index=1)
             threshold = st.number_input('Rendimiento mínimo (%)', value=0.0, min_value=-100.0, max_value=100.0, step=0.1)
             p2p = st.checkbox('Incluir Binance P2P', value=True)
@@ -295,22 +299,31 @@ def render():
             comparisons,comparison_error=comparison_snapshot(quote_asset,quote_volume)
             auto_usdt,usdt_error = comparison_snapshot('USDT',1000.0)
             auto_usdc,usdc_error = comparison_snapshot('USDC',1000.0)
+            crypto_rows=[]
+            crypto_errors=[]
+            for coin in assets:
+                if coin not in ('BTC','ETH','SOL'): continue
+                rows,error=comparison_snapshot(coin,{'BTC':0.1,'ETH':1.0,'SOL':20.0}[coin])
+                crypto_rows.extend(rows)
+                if error: crypto_errors.append(coin+': '+error)
         now = time.time()
         comparisons = [r for r in comparisons if -5 <= now-r['timestamp'] <= 180]
         fresh = [e for e in edges if -5 <= now-e.observed <= 90]
         if auto_mode:
             current_fee_data,current_fee_error=withdrawal_snapshot()
-            auto_rows=auto_usdt+(auto_usdc if 'USDC' in assets else [])
+            auto_rows=auto_usdt+(auto_usdc if 'USDC' in assets else [])+crypto_rows
             if not p2p: auto_rows=[r for r in auto_rows if r['id']!='binancep2p']
             aggregate,automatic_transfers=criptoya.automatic_edges(auto_rows,current_fee_data,now)
             spot=[e for e in fresh if 'COP' not in (e.source[1],e.target[1])]
-            routes=find_routes(spot+aggregate+automatic_transfers,capital,max_venues,cash_cost,slippage,now,max_age=180,allow_indicative=True)
+            routes=find_routes(spot+aggregate+automatic_transfers,capital,max_venues,cash_cost,slippage,now,max_age=180,allow_indicative=True,excluded_venues=excluded,strategies=strategies)
             ready=True
         else:
             ready = costs_ok and bool(transfers)
-            routes = find_routes(fresh+transfers, capital, max_venues, cash_cost, slippage, now) if ready else []
+            routes = find_routes(fresh+transfers, capital, max_venues, cash_cost, slippage, now,excluded_venues=excluded,strategies=strategies) if ready else []
         visible = [r for r in routes if float(r.pct) >= threshold]
         best = visible[0] if visible else None
+        if excluded: st.caption('Excluidos del cálculo: '+', '.join(excluded))
+        if not strategies: st.info('Selecciona al menos una estrategia en Filtros para mostrar rulos.')
         hero_title = '◇ Mejor ruta estimada de esta consulta' if best else '◇ Radar automático COP' if auto_mode else '◇ Tu radar en pesos colombianos'
         hero_route = escape(route_title(best)) + f' · {float(best.pct):+.2f}% neto estimado' if best else 'Sin oportunidades positivas con los datos disponibles.' if auto_mode else 'COP → Cripto → COP'
         hero_note = 'Precios y comisiones publicados. Depósitos, mínimos y condiciones de cuenta sin verificar; no incluye impuestos o cargos bancarios adicionales.' if auto_mode else 'Incluye los costos y las redes que configuraste.' if ready else 'Abre Simular para confirmar costos y configura tus transferencias al final de esta página.'
@@ -327,13 +340,14 @@ def render():
                 note='Sin oportunidades que cumplan tus filtros con los precios y comisiones disponibles.' if auto_mode else 'Pendiente de configurar redes y confirmar costos.' if not ready else 'Sin oportunidades que cumplan tus filtros en esta consulta.'
                 st.markdown(f'<div class="empty-group">{note}</div>',unsafe_allow_html=True)
             for i,r in enumerate(group):
+                st.caption(strategy(r))
                 st.markdown(route_card(r,r is best),unsafe_allow_html=True)
                 if auto_mode:
                     st.caption('Oportunidad estimada: red y comisión publicadas; revisa depósitos, mínimos, límites y métodos de pago antes de operar.')
                 with st.expander(f'Detalle de la ruta · {venues} exchanges · {i+1}'):
                     detail=[{'Paso':j+1,'Operación':e.label,'Desde':' / '.join(e.source),'Hasta':' / '.join(e.target),'Saldo antes':f'{r.balances[j]:.8f}','Saldo después':f'{r.balances[j+1]:.8f}','Comisión %':str(e.fee_pct),'Costo fijo':str(e.fixed)} for j,e in enumerate(r.steps)]
                     st.dataframe(pd.DataFrame(detail),hide_index=True,width='stretch')
-                export.append({'Ruta':route_title(r),'Capital_COP':str(r.capital),'Final_COP':str(r.final),'Resultado_COP':str(r.profit),'Porcentaje':str(r.pct)})
+                export.append({'Ruta':route_title(r),'Estrategia':strategy(r),'Capital_COP':str(r.capital),'Final_COP':str(r.final),'Resultado_COP':str(r.profit),'Porcentaje':str(r.pct)})
         st.markdown(f'<div class="section-title"><span class="section-icon">≡</span>{escape(quote_asset)} en Colombia · compra y venta</div>',unsafe_allow_html=True)
         if comparison_error: st.warning(comparison_error)
         if comparisons:
@@ -388,7 +402,7 @@ def render():
                         {'Aplicación':'Global66','Estado':'API pública USD/COP conectada' if any(r['Aplicación']=='Global66' for r in wallet_rows) else 'Sin cotización pública disponible'}]
             st.dataframe(pd.DataFrame(app_states),hide_index=True,width='stretch')
             st.markdown('[API AstroPay](https://developers.astropay.com/docs/platform/partners-services) · [API Global66](https://documents-b2b.global66.com/transactional-api/destinations/)')
-            for error in set(e for e in (usdt_error,usdc_error) if e): st.warning(error)
+            for error in set(e for e in (usdt_error,usdc_error,*crypto_errors) if e): st.warning(error)
             if auto_mode and current_fee_error: st.warning(current_fee_error)
             st.caption('Los libros directos consumen profundidad y aplican tarifas spot. Las referencias CriptoYa son precios agregados para el volumen consultado, sin mínimos o métodos del anuncio verificables. Se excluyen libros mayores de 90 segundos y referencias mayores de 3 minutos. Binance P2P consulta hasta 20 anuncios por lado; su endpoint web no garantiza estabilidad.')
         if export:
