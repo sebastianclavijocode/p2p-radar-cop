@@ -156,14 +156,16 @@ def render():
         with filters.popover('Filtros', width='stretch'):
             quote_asset = st.selectbox('Activo de la comparación COP', ['USDT','USDC','BTC','ETH','SOL'])
             quote_volume = st.number_input('Volumen de referencia en cripto',min_value=0.000001, value=1000.0 if quote_asset in ('USDT','USDC') else 0.1, key='quote-volume-'+quote_asset, format='%.6f')
-            assets = st.multiselect('Criptomonedas del recorrido', ['BTC','ETH','SOL','USDC'], default=['BTC'])
+            assets = st.multiselect('Criptomonedas del recorrido', ['BTC','ETH','SOL','USDC'], default=['BTC','ETH','SOL','USDC'])
             st.caption('USDT conecta la entrada y salida en COP.')
             max_venues = st.selectbox('Máximo de exchanges', [2,3], index=1)
             threshold = st.number_input('Rendimiento mínimo (%)', value=0.0, min_value=-100.0, max_value=100.0, step=0.1)
             p2p = st.checkbox('Incluir Binance P2P', value=True)
-            methods = st.multiselect('Métodos de pago que puedo usar', ['BancolombiaSA','Nequi','Davivienda','BancoDeBogota'], default=['BancolombiaSA','Nequi'])
-            automatic = st.checkbox('Actualizar precios cada 30 segundos', value=False)
+            methods = st.multiselect('Métodos de pago · consulta directa Binance', ['BancolombiaSA','Nequi','Davivienda','BancoDeBogota'], default=['BancolombiaSA','Nequi'])
+            st.caption('CriptoYa no devuelve filtros por banco ni condiciones del anuncio; el modo automático muestra oportunidades estimadas.')
+            automatic = st.checkbox('Actualizar precios cada 30 segundos', value=True)
         with simulation.popover('Simular', width='stretch'):
+            auto_mode = st.checkbox('Detectar rulos automáticamente con datos publicados',value=True)
             capital = st.number_input('Capital inicial (COP)', min_value=1000.0, max_value=1e12, value=2000000.0, step=100000.0)
             cash_cost = st.number_input('Otros costos totales (COP)', min_value=0.0, value=0.0, step=1000.0)
             slippage = st.number_input('Margen adicional por cambio de precio (%) por conversión', min_value=0.0, max_value=10.0, value=0.1, step=0.05)
@@ -188,7 +190,8 @@ def render():
             valid_manual['Spread %']=(valid_manual['Venta COP']/valid_manual['Compra COP']-1)*100
             st.dataframe(valid_manual.sort_values('Venta COP',ascending=False),hide_index=True,width='stretch')
     network_slot = st.container()
-    with network_slot.expander('⚙  Redes y transferencias · configurar', expanded=False):
+    with network_slot.expander('⚙  Costos y redes avanzados · opcional', expanded=False):
+        st.caption('El modo automático no requiere rellenar esta tabla. Estos ajustes solo se usan si desactivas el cálculo automático en Simular.')
         st.write('1. Busca la dirección que usarás. 2. Escribe la red compatible en ambas cuentas. 3. Completa comisión y mínimo de retiro. 4. Marca Confirmada solo en esa fila.')
         st.caption('Perfil inicial incluido: redes sugeridas, comisiones y mínimos editables. Confirmar todas incluye las monedas seleccionadas.')
         st.caption('Red debe coincidir en retiro y depósito. Confirmada significa que tú revisaste disponibilidad, '
@@ -252,7 +255,7 @@ def render():
         if 'rulo-transfer-message' in st.session_state:
             st.info(st.session_state.pop('rulo-transfer-message'))
         st.download_button('Descargar configuración de redes', config.to_csv(index=False).encode('utf-8-sig'), file_name='redes-rulos-cop.csv', mime='text/csv')
-        st.caption('Para calcular también debes marcar «Confirmé mis comisiones y otros costos» en el botón Simular de arriba.')
+        st.caption('Solo para el modo manual: marca «Confirmé mis comisiones y otros costos» en Simular. El modo automático funciona sin esta confirmación.')
         st.caption('La configuración se conserva durante esta sesión. No se envía dinero ni se guardan claves de exchanges.')
 
     transfers, errors = [], []
@@ -284,43 +287,61 @@ def render():
         with st.spinner('Actualizando mercado…'):
             edges, statuses, received = snapshot(fees, tuple(methods), p2p, tuple(assets))
             comparisons,comparison_error=comparison_snapshot(quote_asset,quote_volume)
+            auto_usdt,usdt_error = comparison_snapshot('USDT',1000.0)
+            auto_usdc,usdc_error = comparison_snapshot('USDC',1000.0)
         now = time.time()
         comparisons = [r for r in comparisons if -5 <= now-r['timestamp'] <= 180]
         fresh = [e for e in edges if -5 <= now-e.observed <= 90]
-        ready = costs_ok and bool(transfers)
-        routes = find_routes(fresh+transfers, capital, max_venues, cash_cost, slippage, now) if ready else []
+        if auto_mode:
+            current_fee_data,current_fee_error=withdrawal_snapshot()
+            auto_rows=auto_usdt+(auto_usdc if 'USDC' in assets else [])
+            if not p2p: auto_rows=[r for r in auto_rows if r['id']!='binancep2p']
+            aggregate,automatic_transfers=criptoya.automatic_edges(auto_rows,current_fee_data,now)
+            spot=[e for e in fresh if 'COP' not in (e.source[1],e.target[1])]
+            routes=find_routes(spot+aggregate+automatic_transfers,capital,max_venues,cash_cost,slippage,now,max_age=180,allow_indicative=True)
+            ready=True
+        else:
+            ready = costs_ok and bool(transfers)
+            routes = find_routes(fresh+transfers, capital, max_venues, cash_cost, slippage, now) if ready else []
         visible = [r for r in routes if float(r.pct) >= threshold]
         best = visible[0] if visible else None
-        hero_title = '◇ Mejor ruta de esta consulta' if best else '◇ Tu radar en pesos colombianos'
-        hero_route = escape(route_title(best)) + f' · {float(best.pct):+.2f}% neto estimado' if best else 'COP → Cripto → COP'
-        hero_note = 'Incluye los costos y las redes que configuraste.' if ready else 'Abre Simular para confirmar costos y configura tus transferencias al final de esta página.'
+        hero_title = '◇ Mejor ruta estimada de esta consulta' if best else '◇ Radar automático COP' if auto_mode else '◇ Tu radar en pesos colombianos'
+        hero_route = escape(route_title(best)) + f' · {float(best.pct):+.2f}% neto estimado' if best else 'Sin oportunidades positivas con los datos disponibles.' if auto_mode else 'COP → Cripto → COP'
+        hero_note = 'Precios y comisiones publicados. Depósitos, mínimos y condiciones de cuenta sin verificar; no incluye impuestos o cargos bancarios adicionales.' if auto_mode else 'Incluye los costos y las redes que configuraste.' if ready else 'Abre Simular para confirmar costos y configura tus transferencias al final de esta página.'
         st.markdown(f'<div class="radar-hero"><div class="hero-eyebrow">{hero_title}</div><div class="hero-route">{hero_route}</div><div class="hero-note">{hero_note}</div></div>', unsafe_allow_html=True)
         source_count = sum(s['Estado']=='OK' for s in statuses)
         st.markdown(comparison_tiles(comparisons) if comparisons else usdt_tiles(fresh, valid_manual), unsafe_allow_html=True)
         st.caption(f'Capital {cop(capital)} · {source_count}/{len(statuses)} fuentes directas · Hasta {max_venues} exchanges · {len(comparisons)} plataformas en comparación COP.')
-        st.markdown(f'<div class="section-title"><span class="section-icon">≡</span>{escape(quote_asset)} en Colombia · compra y venta</div>',unsafe_allow_html=True)
-        if comparison_error: st.warning(comparison_error)
-        if comparisons:
-            st.markdown(comparison_html(comparisons,quote_asset),unsafe_allow_html=True)
-            st.caption(f'Fuente: CriptoYa · Volumen consultado {quote_volume:g} {quote_asset} · Campos totalAsk / totalBid · Precios con antigüedad máxima de 3 minutos. Spread = venta / compra − 1. Estas referencias no incluyen profundidad, límites del anuncio ni método de pago y no alimentan el motor de rutas.')
-            st.markdown('[Ver fuente y redes por plataforma](https://criptoya.com/co#USDT) · [Documentación de la API](https://docs.criptoya.com/colombia/)')
-            st.download_button('Descargar comparación COP',pd.DataFrame(comparisons).drop(columns=['id','timestamp']).to_csv(index=False).encode('utf-8-sig'),file_name='cotizaciones-cop.csv',mime='text/csv')
-        elif not comparison_error:
-            st.info('Sin cotizaciones vigentes para este activo y volumen.')
         export=[]
         for venues, icon, title in [(2,'⇄','Arbitrajes entre exchanges'),(3,'↻','Rulos de tres exchanges')]:
             if venues>max_venues: continue
             group=[r for r in visible if len(r.venues)==venues][:10]
             st.markdown(f'<div class="section-title"><span class="section-icon">{icon}</span>{title}<span class="section-count">{len(group)} rutas</span></div>',unsafe_allow_html=True)
             if not group:
-                note='Pendiente de configurar redes y confirmar costos.' if not ready else 'Sin oportunidades que cumplan tus filtros en esta consulta.'
+                note='Sin oportunidades que cumplan tus filtros con los precios y comisiones disponibles.' if auto_mode else 'Pendiente de configurar redes y confirmar costos.' if not ready else 'Sin oportunidades que cumplan tus filtros en esta consulta.'
                 st.markdown(f'<div class="empty-group">{note}</div>',unsafe_allow_html=True)
             for i,r in enumerate(group):
                 st.markdown(route_card(r,r is best),unsafe_allow_html=True)
+                if auto_mode:
+                    st.caption('Oportunidad estimada: red y comisión publicadas; revisa depósitos, mínimos, límites y métodos de pago antes de operar.')
                 with st.expander(f'Detalle de la ruta · {venues} exchanges · {i+1}'):
                     detail=[{'Paso':j+1,'Operación':e.label,'Desde':' / '.join(e.source),'Hasta':' / '.join(e.target),'Saldo antes':f'{r.balances[j]:.8f}','Saldo después':f'{r.balances[j+1]:.8f}','Comisión %':str(e.fee_pct),'Costo fijo':str(e.fixed)} for j,e in enumerate(r.steps)]
                     st.dataframe(pd.DataFrame(detail),hide_index=True,width='stretch')
                 export.append({'Ruta':route_title(r),'Capital_COP':str(r.capital),'Final_COP':str(r.final),'Resultado_COP':str(r.profit),'Porcentaje':str(r.pct)})
+        st.markdown(f'<div class="section-title"><span class="section-icon">≡</span>{escape(quote_asset)} en Colombia · compra y venta</div>',unsafe_allow_html=True)
+        if comparison_error: st.warning(comparison_error)
+        if comparisons:
+            st.markdown(comparison_html(comparisons,quote_asset),unsafe_allow_html=True)
+            st.caption(f'Fuente: CriptoYa · Volumen consultado {quote_volume:g} {quote_asset} · Campos totalAsk / totalBid · Precios con antigüedad máxima de 3 minutos. Spread = venta / compra − 1. El modo automático usa estas referencias para estimar rulos; no incluye mínimos ni condiciones del anuncio, método de pago o profundidad ejecutable.')
+            st.markdown('[Ver fuente y redes por plataforma](https://criptoya.com/co#USDT) · [Documentación de la API](https://docs.criptoya.com/colombia/)')
+            st.download_button('Descargar comparación COP',pd.DataFrame(comparisons).drop(columns=['id','timestamp']).to_csv(index=False).encode('utf-8-sig'),file_name='cotizaciones-cop.csv',mime='text/csv')
+        elif not comparison_error:
+            st.info('Sin cotizaciones vigentes para este activo y volumen.')
+        arq=[r for r in auto_usdc if r['id']=='dolarapp' and -5<=now-r['timestamp']<=180]
+        if arq and quote_asset!='USDC':
+            st.markdown('<div class="section-title"><span class="section-icon">$</span>ARQ · referencia USDc / COP</div>',unsafe_allow_html=True)
+            st.markdown(comparison_html(arq,'USDC'),unsafe_allow_html=True)
+            st.caption('CriptoYa identifica esta cotización como USDC. El saldo USDc de ARQ y sus transferencias deben comprobarse antes de conectarlo a una ruta on-chain; no se supone que sea un retiro USDC disponible.')
         st.markdown('<div class="section-title"><span class="section-icon">≡</span>Mercados directos utilizados por los rulos</div>',unsafe_allow_html=True)
         markets={}
         for e in fresh:
@@ -344,7 +365,15 @@ def render():
         st.markdown(f'<div class="radar-status"><span><span class="status-dot">●</span> Última consulta {stamp} · Colombia</span><span>{len(fresh)} cotizaciones vigentes</span></div>',unsafe_allow_html=True)
         with st.expander('Estado de las conexiones y alcance de los precios'):
             st.dataframe(pd.DataFrame(statuses),hide_index=True,width='stretch')
-            st.caption('Primer nivel de precio, sin comisiones, sujeto a límites y liquidez. El cálculo de rutas sí consume profundidad y aplica tus costos. Binance P2P consulta hasta 20 anuncios por lado; su endpoint web no garantiza estabilidad. Cotizaciones mayores de 90 segundos quedan excluidas.')
+            app_states=[{'Aplicación':'Lemon','Estado':'Cotización COP vía CriptoYa' if any(r['id']=='lemoncash' for r in auto_usdt) else 'Sin precio COP vigente'},
+                        {'Aplicación':'ARQ','Estado':'Cotización USDc/COP vía CriptoYa' if arq else 'Sin precio USDc/COP vigente'},
+                        {'Aplicación':'AstroPay','Estado':'Cotización COP vía CriptoYa' if any(r['id']=='astropay' for r in auto_usdt) else 'CriptoYa no ofrece este par COP. API de tipos de cambio requiere acceso partner.'},
+                        {'Aplicación':'Global66','Estado':'API de cotización bancaria requiere acceso B2B. No equivale a precio USDT.'}]
+            st.dataframe(pd.DataFrame(app_states),hide_index=True,width='stretch')
+            st.markdown('[API AstroPay](https://developers.astropay.com/docs/platform/partners-services) · [API Global66](https://documents-b2b.global66.com/transactional-api/destinations/)')
+            for error in set(e for e in (usdt_error,usdc_error) if e): st.warning(error)
+            if auto_mode and current_fee_error: st.warning(current_fee_error)
+            st.caption('Los libros directos consumen profundidad y aplican tarifas spot. Las referencias CriptoYa son precios agregados para el volumen consultado, sin mínimos o métodos del anuncio verificables. Se excluyen libros mayores de 90 segundos y referencias mayores de 3 minutos. Binance P2P consulta hasta 20 anuncios por lado; su endpoint web no garantiza estabilidad.')
         if export:
             st.download_button('Descargar rutas (CSV)',pd.DataFrame(export).to_csv(index=False).encode('utf-8-sig'),file_name='rulos-cop.csv',mime='text/csv')
         st.markdown('<p class="radar-note">Resultados estimados, no ganancias garantizadas. Verifica requisitos del anuncio, redes, mínimos de orden y disponibilidad de depósitos y retiros. Este radar no ejecuta operaciones.</p>',unsafe_allow_html=True)
