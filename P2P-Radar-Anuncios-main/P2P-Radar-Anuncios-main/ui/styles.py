@@ -37,7 +37,10 @@ details > summary > span {
 [data-testid="stSidebarCollapsedControl"] { display: flex !important; visibility: visible !important; }
 [data-testid="stToolbar"] { display: flex !important; }
 [data-testid="stToolbarActions"] { display: none !important; }
-[data-testid="stExpandSidebarButton"] { visibility: visible !important; color: #28c6ef !important; }
+[data-testid="stExpandSidebarButton"] { visibility: visible !important; color: #28c6ef !important; width: auto !important; padding: 8px 12px !important; }
+[data-testid="stExpandSidebarButton"] [data-testid="stIconMaterial"],
+[data-testid="stSidebar"] [data-testid="stBaseButton-headerNoPadding"] [data-testid="stIconMaterial"] { display: none !important; }
+[data-testid="stSidebar"] [data-testid="stBaseButton-headerNoPadding"]::after { content: "×"; font-size: 24px; color: #28c6ef; }
 [data-testid="stExpandSidebarButton"]::after { content: "Configuración"; font-size: 13px; margin-left: 6px; color: #28c6ef; }
 footer                          { display: none !important; }
 [data-testid="stDecoration"]   { display: none !important; }
