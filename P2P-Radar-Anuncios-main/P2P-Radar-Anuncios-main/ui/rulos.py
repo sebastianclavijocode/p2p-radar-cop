@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 from core.routes import Edge, find_routes, number
 from exchanges.live_routes import collect
-from exchanges import criptoya
+from exchanges import criptoya, public_fx
 
 
 def cop(value):
@@ -27,6 +27,11 @@ def comparison_snapshot(asset, volume):
     except Exception as exc:
         status = getattr(getattr(exc,'response',None),'status_code',None)
         return [], f'CriptoYa no disponible · HTTP {status}' if status else 'CriptoYa no disponible en esta consulta'
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def wallet_snapshot(capital):
+    return public_fx.fetch_references(capital)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -177,6 +182,7 @@ def render():
             snapshot.clear()
             comparison_snapshot.clear()
             withdrawal_snapshot.clear()
+            wallet_snapshot.clear()
         views.button('P2P', help='Abrir Radar original · Yo publico', width='stretch', on_click=lambda: st.session_state.update({'radar-view':'Radar original · Yo publico'}))
     live_slot = st.container()
     with st.expander('Cotizaciones manuales · respaldo opcional', expanded=False):
@@ -342,6 +348,17 @@ def render():
             st.markdown('<div class="section-title"><span class="section-icon">$</span>ARQ · referencia USDc / COP</div>',unsafe_allow_html=True)
             st.markdown(comparison_html(arq,'USDC'),unsafe_allow_html=True)
             st.caption('CriptoYa identifica esta cotización como USDC. El saldo USDc de ARQ y sus transferencias deben comprobarse antes de conectarlo a una ruta on-chain; no se supone que sea un retiro USDC disponible.')
+        wallet_rows,wallet_errors=wallet_snapshot(float(capital))
+        wallet_rows=[r for r in wallet_rows if -5<=now-r['timestamp']<=180]
+        st.markdown('<div class="section-title"><span class="section-icon">$</span>Global66 y AstroPay · dólares / COP</div>',unsafe_allow_html=True)
+        if wallet_rows:
+            wallet_table=pd.DataFrame(wallet_rows).drop(columns=['timestamp']).rename(columns={'Costo compra':'Costo compra (COP)'})
+            for col in ('Costo compra (COP)','Costo venta USD'):
+                wallet_table[col]=wallet_table[col].map(lambda v:'Incluido en tasa' if pd.isna(v) else f'{v:,.2f}')
+            st.dataframe(wallet_table,hide_index=True,width='stretch')
+            st.caption(f'Compra: {cop(capital)}. Venta: 1.000 USD. Global66 usa el importe final cotizado, con costo incluido; no se descuenta dos veces. AstroPay usa la tasa cliente, con spread incluido. Consulta pública, no cotización garantizada para tu cuenta. Los USD son saldos de estas aplicaciones: no se asumen USDT ni transferencias gratuitas a exchanges.')
+        for error in wallet_errors: st.info(error)
+        st.caption('Estas cotizaciones se muestran automáticamente. Las rutas bancarias hacia exchanges no se incorporan a los rulos hasta disponer de sus condiciones de transferencia y conversión.')
         st.markdown('<div class="section-title"><span class="section-icon">≡</span>Mercados directos utilizados por los rulos</div>',unsafe_allow_html=True)
         markets={}
         for e in fresh:
@@ -367,8 +384,8 @@ def render():
             st.dataframe(pd.DataFrame(statuses),hide_index=True,width='stretch')
             app_states=[{'Aplicación':'Lemon','Estado':'Cotización COP vía CriptoYa' if any(r['id']=='lemoncash' for r in auto_usdt) else 'Sin precio COP vigente'},
                         {'Aplicación':'ARQ','Estado':'Cotización USDc/COP vía CriptoYa' if arq else 'Sin precio USDc/COP vigente'},
-                        {'Aplicación':'AstroPay','Estado':'Cotización COP vía CriptoYa' if any(r['id']=='astropay' for r in auto_usdt) else 'CriptoYa no ofrece este par COP. API de tipos de cambio requiere acceso partner.'},
-                        {'Aplicación':'Global66','Estado':'API de cotización bancaria requiere acceso B2B. No equivale a precio USDT.'}]
+                        {'Aplicación':'AstroPay','Estado':'API pública USD/COP conectada' if any(r['Aplicación']=='AstroPay' for r in wallet_rows) else 'Sin cotización pública disponible'},
+                        {'Aplicación':'Global66','Estado':'API pública USD/COP conectada' if any(r['Aplicación']=='Global66' for r in wallet_rows) else 'Sin cotización pública disponible'}]
             st.dataframe(pd.DataFrame(app_states),hide_index=True,width='stretch')
             st.markdown('[API AstroPay](https://developers.astropay.com/docs/platform/partners-services) · [API Global66](https://documents-b2b.global66.com/transactional-api/destinations/)')
             for error in set(e for e in (usdt_error,usdc_error) if e): st.warning(error)
