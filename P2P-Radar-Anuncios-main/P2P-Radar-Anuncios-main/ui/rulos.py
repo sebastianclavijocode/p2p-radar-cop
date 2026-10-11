@@ -164,8 +164,10 @@ def render():
             assets = st.multiselect('Criptomonedas del recorrido', ['BTC','ETH','SOL','USDC'], default=['BTC','ETH','SOL','USDC'])
             st.caption('USDT conecta la entrada y salida en COP.')
             venue_options=sorted(set(criptoya.VENUE_KEYS)|set(criptoya.NAMES.values())-{'Binance P2P','Bybit P2P','OKX P2P','MEXC P2P','Bitso Alpha'})
-            excluded=st.multiselect('Excluir exchanges de los rulos',venue_options,key='excluded-route-venues')
-            strategies=st.multiselect('Estrategias incluidas',list(STRATEGIES),default=list(STRATEGIES),key='route-strategies')
+            excluded=st.multiselect('Excluir exchanges de los rulos',venue_options,default=st.session_state.get('saved-route-exclusions',[]),key='excluded-route-venues')
+            st.session_state['saved-route-exclusions']=excluded
+            strategies=st.multiselect('Estrategias incluidas',list(STRATEGIES),default=st.session_state.get('saved-route-strategies',list(STRATEGIES)),key='route-strategies')
+            st.session_state['saved-route-strategies']=strategies
             st.caption('Triangular COP: COP → USDT → BTC/ETH/SOL → COP, o recorrido inverso. Las exclusiones se aplican a todos los pasos; no indican una valoración de seguridad del exchange.')
             max_venues = st.selectbox('Máximo de exchanges', [2,3], index=1)
             threshold = st.number_input('Rendimiento mínimo (%)', value=0.0, min_value=-100.0, max_value=100.0, step=0.1)
