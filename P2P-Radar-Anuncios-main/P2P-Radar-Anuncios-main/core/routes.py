@@ -28,16 +28,19 @@ class Edge:
     label: str = ""
     reference: str = ""
     verified: bool = True  # transfer availability confirmed by user, not API
+    indicative: bool = False  # aggregate/public-network estimate; never account verification
 
-    def apply(self, amount, now, max_age=90, slippage_pct=D(0)):
+    def apply(self, amount, now, max_age=90, slippage_pct=D(0), allow_indicative=False):
         amount = number(amount)
+        if self.indicative and not allow_indicative:
+            raise ValueError('Referencia indicativa fuera del modo automático estimado')
         fee, fixed, slip = map(number, (self.fee_pct, self.fixed, slippage_pct))
         if not (D(0) <= fee < 100 and D(0) <= slip < 100 and fixed >= 0):
             raise ValueError("Costos inválidos")
         if amount <= 0 or amount < self.minimum or (self.maximum is not None and amount > self.maximum):
             raise ValueError("Monto fuera de límites")
         if self.kind == "transfer":
-            if not self.verified or self.source[1] != self.target[1] or self.source[0] == self.target[0]:
+            if (not self.verified and not (self.indicative and allow_indicative)) or self.source[1] != self.target[1] or self.source[0] == self.target[0]:
                 raise ValueError("Transferencia no confirmada")
             gross = amount
         else:
@@ -90,7 +93,7 @@ class Route:
 
 
 def find_routes(edges, capital, max_venues=3, cash_cost=0, slippage_pct=0,
-                now=None, max_age=90, max_steps=7, limit=100):
+                now=None, max_age=90, max_steps=7, limit=100, allow_indicative=False):
     """A repeated node is allowed only immediately before closing into COP.
 
     Seven edges allow COP buy + transfer + trade + transfer + trade +
@@ -121,7 +124,7 @@ def find_routes(edges, capital, max_venues=3, cash_cost=0, slippage_pct=0,
             if revisited and not any(e.target[1] == 'COP' for e in graph[edge.target]):
                 continue
             try:
-                out = edge.apply(amount, now, max_age, slippage_pct)
+                out = edge.apply(amount, now, max_age, slippage_pct, allow_indicative)
             except (ValueError, InvalidOperation):
                 continue
             new_steps, new_balances = steps + [edge], balances + [out]
