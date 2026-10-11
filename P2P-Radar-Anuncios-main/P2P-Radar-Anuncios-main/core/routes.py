@@ -92,8 +92,17 @@ class Route:
         return list(dict.fromkeys(node[0] for e in self.steps for node in (e.source, e.target)))
 
 
+STRATEGIES = ("Compra y venta directa", "Triangular COP", "Rulo con conversiones")
+
+def strategy(route):
+    if route.steps[0].target[1] != route.steps[-1].source[1]:
+        return "Triangular COP"
+    if any(e.kind != "transfer" and "COP" not in (e.source[1], e.target[1]) for e in route.steps):
+        return "Rulo con conversiones"
+    return "Compra y venta directa"
+
 def find_routes(edges, capital, max_venues=3, cash_cost=0, slippage_pct=0,
-                now=None, max_age=90, max_steps=7, limit=100, allow_indicative=False):
+                now=None, max_age=90, max_steps=7, limit=100, allow_indicative=False, excluded_venues=(), strategies=None):
     """A repeated node is allowed only immediately before closing into COP.
 
     Seven edges allow COP buy + transfer + trade + transfer + trade +
@@ -104,7 +113,9 @@ def find_routes(edges, capital, max_venues=3, cash_cost=0, slippage_pct=0,
         raise ValueError("Configuración de búsqueda inválida")
     now = time.time() if now is None else now
     graph = defaultdict(list)
+    excluded=set(excluded_venues)
     for edge in edges:
+        if edge.source[0] in excluded or edge.target[0] in excluded: continue
         graph[edge.source].append(edge)
     results = []
 
@@ -130,7 +141,9 @@ def find_routes(edges, capital, max_venues=3, cash_cost=0, slippage_pct=0,
             new_steps, new_balances = steps + [edge], balances + [out]
             if terminal:
                 if len(next_venues) >= 2:
-                    results.append(Route(new_steps, new_balances, capital, cash_cost))
+                    route=Route(new_steps, new_balances, capital, cash_cost)
+                    if strategies is None or strategy(route) in strategies:
+                        results.append(route)
             else:
                 visit(edge.target, out, new_steps, new_balances,
                       visited | {edge.target}, next_venues, closing=revisited)
