@@ -292,7 +292,7 @@ def main() -> None:
     st.set_page_config(
         page_title="P2P Spread Radar · Bot de Alertas",
         page_icon="🤖", layout="wide",
-        initial_sidebar_state="collapsed",
+        initial_sidebar_state="expanded",
     )
     view = st.sidebar.radio("Vista", ["Rulos COP · datos reales", "Radar original · Yo publico"], key="radar-view")
     if view == "Rulos COP · datos reales":
