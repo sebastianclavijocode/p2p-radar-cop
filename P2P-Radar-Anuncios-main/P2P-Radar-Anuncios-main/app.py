@@ -284,7 +284,7 @@ def _render_kpis(ok_count, best_net, best_cap, best_cap_fiat, best_cap_usdt, bes
         cap_str = "—"
     upd_s = last_upd.strftime("%H:%M:%S") if last_upd else "—"
     html = build_hero_html(ok_count, best_net, cap_str, upd_s)
-    components.html(html, height=168, scrolling=False)
+    components.html(html, height=290, scrolling=True)
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
@@ -672,11 +672,12 @@ def main() -> None:
             unsafe_allow_html=True
         )
         taker_html = build_taker_cards_html(taker_ops)
-        components.html(taker_html, height=len(taker_ops) * 260 + 30, scrolling=False)
+        taker_height = min(1200, 30 + sum(600 if t.get("hibrido_posible") or not t.get("taker_taker_posible", True) else 500 for t in taker_ops))
+        components.html(taker_html, height=taker_height, scrolling=True)
 
     # ── 4. ALERTAS MAKER-MAKER ────────────────────────────────────────────────
     alerts_html = build_alerts_html(results)
-    alerts_height = 80 + max(len(ok_results) * 280, 200)
+    alerts_height = min(1200, 80 + max(len(ok_results) * 640, 300))
     components.html(alerts_html, height=alerts_height, scrolling=True)
 
     # ── VISTAS SECUNDARIAS (tabs debajo del dashboard) ────────────────────────
