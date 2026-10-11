@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from core.models import P2PAd, SpreadResult
+from exchanges.bybit import BYBIT_PAGOS
 from ui.styles import CARD_CSS, DASHBOARD_CSS
 
 
@@ -40,7 +41,7 @@ def _gc(pct: float) -> tuple:
 
 def _pays(ad: P2PAd, n: int = 3) -> str:
     if not ad.payment_methods: return "sin datos"
-    methods = [m for m in ad.payment_methods if m][:n]
+    methods = [(BYBIT_PAGOS.get(str(m),str(m)) if ad.exchange=="Bybit" else m) for m in ad.payment_methods if m][:n]
     extra = len(ad.payment_methods) - len(methods)
     return ", ".join(methods) + (f" +{extra}" if extra > 0 else "")
 
