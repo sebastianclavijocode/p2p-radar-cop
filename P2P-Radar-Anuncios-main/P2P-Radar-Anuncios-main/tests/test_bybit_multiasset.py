@@ -31,9 +31,10 @@ def test_signed_read_only_request_and_local_filters(monkeypatch):
     assert result[0].payment_methods==['8']
 
 
-def test_missing_credentials_does_not_call_api(monkeypatch):
+def test_missing_credentials_uses_public_ads(monkeypatch):
     monkeypatch.setattr(bybit,'credentials',lambda:('',''))
-    with pytest.raises(RuntimeError,match='BYBIT_API_KEY'): bybit.fetch_ads('USDT','COP','BUY')
+    monkeypatch.setattr(bybit,'fetch_public_ads',lambda *a:['public'])
+    assert bybit.fetch_ads('USDT','COP','BUY')==['public']
 
 
 def test_bybit_block_not_empty_market(monkeypatch):
@@ -65,3 +66,32 @@ def test_spot_symbol_and_asset_identity(monkeypatch):
     assert edges[0].target==('Binance','ETH')
     assert edges[1].source==('Binance','ETH')
     assert 'ETHUSDT' in edges[0].reference
+
+
+def test_public_direction_filters_and_inventory_limit(monkeypatch):
+    bybit._cache.clear()
+    def post(url,json,headers,timeout):
+        assert url==bybit._PUBLIC_ENDPOINT
+        assert json['side']=='1' and json['payment']==['209']
+        assert json['amount']=='2000000' and json['authMaker'] is True
+        good=ad(asset='USDT',payments=['209']); good.update(price='3200',lastQuantity='700',minAmount='100000',maxAmount='3000000')
+        other=dict(good,id='2',payments=['126'])
+        class Response:
+            status_code=200
+            def raise_for_status(self):pass
+            def json(self):return {'ret_code':0,'result':{'items':[good,other]}}
+        return Response()
+    monkeypatch.setattr(bybit.requests,'post',post)
+    ads=bybit.fetch_public_ads('USDT','COP','BUY',['209'],20,True,2000000)
+    assert len(ads)==1 and ads[0].trade_type=='BUY'
+    assert ads[0].max_amount==2240000
+
+
+def test_public_rejected_query_is_not_empty_market(monkeypatch):
+    bybit._cache.clear()
+    class Response:
+        status_code=200
+        def raise_for_status(self):pass
+        def json(self):return {'ret_code':100,'ret_msg':'not shown'}
+    monkeypatch.setattr(bybit.requests,'post',lambda *a,**k:Response())
+    with pytest.raises(RuntimeError,match='rechazada'):bybit.fetch_public_ads()
