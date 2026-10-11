@@ -50,6 +50,20 @@ def fetch_bitso(base, quote, fee):
 
 def fetch_spot(venue, fee, base="BTC"):
     symbol = base + "USDT"
+    if venue == 'MEXC':
+        url = 'https://api.mexc.com/api/v3/depth'
+        data = _request('GET', url, params={'symbol': symbol, 'limit': 100})
+        return market(venue, base, 'USDT', data['asks'], data['bids'],
+                      time.time(), url + '?symbol=' + symbol, fee)
+    if venue == 'OKX':
+        url = 'https://www.okx.com/api/v5/market/books'
+        data = _request('GET', url, params={'instId': base + '-USDT', 'sz': 50})
+        if str(data.get('code')) != '0' or not data.get('data'):
+            raise ValueError('OKX rechazó la consulta')
+        book = data['data'][0]
+        return market(venue, base, 'USDT', [r[:2] for r in book['asks']],
+                      [r[:2] for r in book['bids']], float(book['ts']) / 1000,
+                      url + '?instId=' + base + '-USDT', fee)
     if venue == 'Binance':
         url = 'https://data-api.binance.vision/api/v3/depth'
         data = _request('GET', url, params={'symbol': symbol, 'limit': 100})
@@ -108,8 +122,8 @@ def collect(fees, methods, include_p2p=True, assets=('BTC',)):
         if base not in ('BTC', 'ETH', 'SOL', 'USDC'):
             raise ValueError('Cripto no soportada')
         jobs.append((f'Bitso {base}/USDT', lambda base=base: fetch_bitso(base, 'USDT', fees['Bitso'])))
-        for venue in ('Binance', 'Bybit'):
-            jobs.append((f'{venue} {base}/USDT', lambda venue=venue, base=base: fetch_spot(venue, fees[venue], base)))
+        for venue in ('Binance', 'Bybit', 'OKX', 'MEXC'):
+            jobs.append((f'{venue} {base}/USDT', lambda venue=venue, base=base: fetch_spot(venue, fees.get(venue, 0.10), base)))
     if include_p2p and methods:
         for side in ('BUY', 'SELL'):
             jobs.append((f'Binance P2P {side}', lambda side=side: fetch_p2p(side, fees['Binance P2P'], methods)))
