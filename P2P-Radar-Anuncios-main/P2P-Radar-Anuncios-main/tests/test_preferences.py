@@ -40,3 +40,22 @@ def test_mount_restores_before_widgets_and_retains_inactive_settings(monkeypatch
     assert state['cfg-p2p-fiats']==['COP','USD']
     assert calls[-1]['hydrated'] is True
     assert calls[-1]['preferences']['cfg-rulo-capital']==5000000
+
+
+def test_query_exclusions_do_not_request_unwanted_methods(monkeypatch):
+    import app
+    class Exchange:
+        EXCHANGE_NOTE='Unavailable'
+        def is_supported(self):return False
+        def fetch_ads(self,**kwargs):raise AssertionError('An excluded method must not be queried')
+    monkeypatch.setitem(app.EXCHANGES,'Test',Exchange())
+    monkeypatch.setattr(app,'METHODS_CATALOG',[{'id':'prex','human_name':'Prex','fiat':'UYU'},
+                                            {'id':'nequi','human_name':'Nequi','fiat':'COP'}])
+    args=dict(exchange_name='Test',asset='USDT',mappings={},is_verified=True,
+              publication_mode='maker',epsilon_fiat=0,epsilon_pct=0,fee_slippage_pct=0,
+              exclude_ads=False,ad_threshold_pct=0,capital_cfg={},buffer_pct=0,
+              min_net_profit_pct=0,allow_outside_target=True,top_n=10)
+    assert app.run_queries(**args,selected_fiats=['COP'],excluded_methods=['nequi'])==[]
+    result=app.run_queries(**args,selected_fiats=['COP'],excluded_methods=['nequi'],
+         extra_methods=[{'id':'foreign','human_name':'Custom','fiat':'COP','_payment_id':'1','_exchange':'Binance'}])
+    assert len(result)==1 and result[0].status=='NOT_AVAILABLE'
