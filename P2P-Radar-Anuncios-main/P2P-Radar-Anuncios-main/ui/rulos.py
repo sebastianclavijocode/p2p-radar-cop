@@ -45,8 +45,8 @@ def withdrawal_snapshot():
 STYLE = """<style>
 :root{--cyan:#28c6ef;--green:#24d1a0;--muted:#8c9bb2;--line:#242b37}
 .stApp{background:radial-gradient(ellipse at 0 0,#1a1529 0,transparent 55%),#0b0e14;color:#e9edf6}
-[data-testid="stHeader"]{background:transparent;height:0;visibility:hidden}
-[data-testid="stSidebar"],[data-testid="stSidebarCollapsedControl"]{display:none!important}
+.stApp:has(.st-key-radar-toolbar) [data-testid="stHeader"]{background:transparent;height:0;visibility:hidden}
+.stApp:has(.st-key-radar-toolbar) [data-testid="stSidebar"],.stApp:has(.st-key-radar-toolbar) [data-testid="stSidebarCollapsedControl"]{display:none!important}
 [data-testid="stMainBlockContainer"]{max-width:1140px;padding:20px 24px 65px}
 [data-testid="stVerticalBlock"]{gap:.65rem}
 .st-key-radar-toolbar{padding:4px 0 16px;border-bottom:1px solid #252631;margin-bottom:14px}
