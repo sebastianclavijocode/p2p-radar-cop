@@ -32,7 +32,7 @@ details > summary > span {
 
 /* ── Ocultar chrome de Streamlit ── */
 #MainMenu { visibility: hidden !important; }
-header[data-testid="stHeader"] { background: #0d1117 !important; visibility: visible !important; height: 3.5rem !important; }
+ .stApp:not(:has(.st-key-radar-toolbar)) header[data-testid="stHeader"] { background: #0d1117 !important; visibility: visible !important; height: 3.5rem !important; }
 [data-testid="stSidebarCollapsedControl"] button { visibility: visible !important; }
 [data-testid="stSidebarCollapsedControl"] { display: flex !important; visibility: visible !important; }
 [data-testid="stToolbar"]      { display: none !important; }
