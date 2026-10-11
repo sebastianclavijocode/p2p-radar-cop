@@ -35,7 +35,10 @@ details > summary > span {
  .stApp:not(:has(.st-key-radar-toolbar)) header[data-testid="stHeader"] { background: #0d1117 !important; visibility: visible !important; height: 3.5rem !important; }
 [data-testid="stSidebarCollapsedControl"] button { visibility: visible !important; }
 [data-testid="stSidebarCollapsedControl"] { display: flex !important; visibility: visible !important; }
-[data-testid="stToolbar"]      { display: none !important; }
+[data-testid="stToolbar"] { display: flex !important; }
+[data-testid="stToolbarActions"] { display: none !important; }
+[data-testid="stExpandSidebarButton"] { visibility: visible !important; color: #28c6ef !important; }
+[data-testid="stExpandSidebarButton"]::after { content: "Configuración"; font-size: 13px; margin-left: 6px; color: #28c6ef; }
 footer                          { display: none !important; }
 [data-testid="stDecoration"]   { display: none !important; }
 
