@@ -1,0 +1,18 @@
+<!doctype html><html><head><meta charset="utf-8"></head><body><script>
+const key='cop-radar-preferences-v1';
+const send=(type,extra={})=>parent.postMessage({isStreamlitMessage:true,type,...extra},'*');
+let initialized=false,storageError=false;
+window.addEventListener('message',event=>{
+ if(event.data?.type!=='streamlit:render')return;
+ const args=event.data.args||{};
+ if(!initialized){
+  initialized=true;let preferences={};
+  try{preferences=JSON.parse(localStorage.getItem(key)||'{}');if(!preferences||typeof preferences!=='object'||Array.isArray(preferences))preferences={};}catch{storageError=true;}
+  send('streamlit:setComponentValue',{value:{preferences,storageError},dataType:'json'});
+ }
+ if(args.hydrated){try{localStorage.setItem(key,JSON.stringify(args.preferences||{}));}catch{storageError=true;}}
+ send('streamlit:setFrameHeight',{height:0});
+});
+send('streamlit:componentReady',{apiVersion:1});
+send('streamlit:setFrameHeight',{height:0});
+</script></body></html>
