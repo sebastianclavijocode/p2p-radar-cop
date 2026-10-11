@@ -20,6 +20,7 @@ from core.custom_methods import add_custom_method, load_custom_methods, save_cus
 from core.mapping import DEFAULT_MAPPINGS, load_mappings, save_mappings
 from core.models import METHODS_CATALOG, SpreadResult
 from core.scanner import scan_all_methods
+from core.preferences import filter_catalog, hidden_method
 from core.spread import analyze_opportunity
 from ui.cards import build_alerts_html, build_dashboard_html, build_feed_html, build_hero_html, build_kpi_html, build_telegram_html, build_taker_cards_html
 from ui.styles import GLASS_CSS
@@ -93,6 +94,7 @@ def run_queries(
     min_net_profit_pct, allow_outside_target, top_n,
     extra_methods: List[dict] = [],
     merchant_check: bool = True,
+    selected_fiats=None, excluded_methods=(),
 ) -> List[SpreadResult]:
     exchange_mod = EXCHANGES[exchange_name]
     ex_key = exchange_name.lower()
@@ -102,6 +104,7 @@ def run_queries(
         catalog = [{"id":"bybit_cop", "human_name":"COP · todos los métodos Bybit", "fiat":"COP"}]
         mappings = {"bybit":{"bybit_cop":{"payment_ids":[],"available":True}}}
 
+    catalog=filter_catalog(catalog,selected_fiats,excluded_methods)
     for method in catalog:
         mid, mname, fiat = method["id"], method["human_name"], method["fiat"]
         # Custom methods carry their payment_id directly — validate exchange and auto-build mapping config
@@ -294,6 +297,8 @@ def main() -> None:
         page_icon="🤖", layout="wide",
         initial_sidebar_state="expanded",
     )
+    from ui.preferences import mount
+    mount()
     view = st.sidebar.radio("Vista", ["Rulos COP · datos reales", "Radar original · Yo publico"], key="radar-view")
     if view == "Rulos COP · datos reales":
         from ui.rulos import render
@@ -391,27 +396,37 @@ def main() -> None:
             exchange_name = st.selectbox("Exchange",
                 ["Binance", "Bybit"],
                 help="El exchange donde se buscan los anuncios P2P. BingX no tiene API pública y no está soportado.",
-                label_visibility="collapsed")
+                label_visibility="collapsed", key='cfg-p2p-5b13eac7ed3a')
         with st.expander("Cripto", expanded=True):
             asset = st.selectbox("Cripto",
                 ["USDT", "USDC", "BTC", "ETH"],
                 help="Consulta la moneda elegida. La disponibilidad depende del exchange, moneda fiat y método de pago.",
-                label_visibility="collapsed")
+                label_visibility="collapsed", key='cfg-p2p-24c77e18ce15')
 
         st.divider()
+        with st.expander("Monedas y métodos que uso",expanded=True):
+            selected_fiats=st.multiselect('Monedas del radar P2P',['COP','USD','EUR','ARS','UYU'],default=['COP','USD','EUR'],key='cfg-p2p-fiats')
+            catalog=METHODS_CATALOG+st.session_state.get('custom_methods',[])
+            catalog_by_id={m['id']:m for m in catalog}
+            defaults=[m['id'] for m in catalog if 'prex' in m['human_name'].casefold() or 'mercado pago' in m['human_name'].casefold()]
+            current=st.session_state.get('cfg-p2p-excluded-methods')
+            if current is not None:st.session_state['cfg-p2p-excluded-methods']=[mid for mid in current if mid in catalog_by_id]
+            excluded_methods=st.multiselect('Excluir métodos de pago',list(catalog_by_id),default=defaults,
+                format_func=lambda mid:catalog_by_id[mid]['human_name']+' · '+catalog_by_id[mid]['fiat'],key='cfg-p2p-excluded-methods')
+            st.caption('Tus filtros, capital y comisiones se guardan automáticamente en este navegador.')
         prev_merchant = st.session_state.get("_prev_merchant_check", True)
         with st.expander("Filtros de oportunidad", expanded=True):
             min_net = st.number_input("Ganancia minima (%)", -50.0, 50.0, 0.0, 0.05, "%.2f",
                 help="Solo muestra oportunidades con esta ganancia neta o más. "
-                     "0% = muestra todo. 1% = solo oportunidades con al menos 1% de ganancia después de fees.")
+                     "0% = muestra todo. 1% = solo oportunidades con al menos 1% de ganancia después de fees.", key='cfg-p2p-fb59d073be15')
             allow_out = st.toggle("Ignorar límite de capital",
                 value=True,
-                help="Si está activado, muestra oportunidades aunque el capital recomendado quede fuera del rango objetivo.")
+                help="Si está activado, muestra oportunidades aunque el capital recomendado quede fuera del rango objetivo.", key='cfg-p2p-282e5041f87f')
 
         with st.expander("Consulta al mercado", expanded=True):
             top_n = st.slider("Anuncios a analizar", 3, 20, 10,
                 help="Cuántos anuncios del mercado se analizan por lado (compra y venta). "
-                     "Más anuncios = más preciso pero más lento.")
+                     "Más anuncios = más preciso pero más lento.", key='cfg-p2p-daf428cd7827')
         buf_pct = 1.0
 
         with st.expander("Filtro de anuncios", expanded=True):
@@ -419,11 +434,11 @@ def main() -> None:
                 value=True,
                 help="Activado: muestra solo anuncios de comerciantes verificados (Pro Merchants de Binance) "
                      "y aplica comisión maker reducida. "
-                     "Desactivado: incluye todos y aplica comisión estándar.")
+                     "Desactivado: incluye todos y aplica comisión estándar.", key='cfg-p2p-da4957b94cca')
             excl_ads = st.toggle("Excluir anuncios pagos",
                 value=True,
                 help="Algunos anuncios son publicidad pagada con precios fuera del mercado real. "
-                     "Activar para ignorarlos y usar solo el precio real del mercado.")
+                     "Activar para ignorarlos y usar solo el precio real del mercado.", key='cfg-p2p-2ca246505a37')
         if merchant_check != prev_merchant:
             st.warning("⚠️ Presioná **Actualizar** para aplicar el cambio.")
         st.session_state["_prev_merchant_check"] = merchant_check
@@ -435,7 +450,7 @@ def main() -> None:
                 value=False,
                 help="Activado: publicás ligeramente mejor que el top del libro para quedar primero en la cola. "
                      "Desactivado: publicás al mismo precio que el top (match_top).",
-            )
+             key='cfg-p2p-73e786d23269')
             pub_mode = "beat_top" if beat_top else "match_top"
             eps_fiat = 0.0
             eps_pct  = st.number_input(
@@ -443,13 +458,13 @@ def main() -> None:
                 min_value=0.0, max_value=1.0, value=0.05, step=0.01, format="%.2f",
                 help="Cuánto mejorar el precio del top para ganar prioridad. Solo se usa en modo beat_top.",
                 disabled=not beat_top,
-            ) if beat_top else 0.0
+             key='cfg-p2p-b318772a6dbe') if beat_top else 0.0
             fee_slippage_pct = st.number_input(
                 "Slippage (%)",
                 min_value=0.0, max_value=2.0, value=0.0, step=0.05, format="%.2f",
                 help="Coste estimado de deslizamiento por ejecución parcial o demoras. "
                      "0% = sin slippage. Se descuenta del net profit.",
-            )
+             key='cfg-p2p-804e15143563')
 
         # is_verified se deriva de merchant_check:
         # si filtrás solo verificados → vos también sos verificado → comisión reducida
@@ -489,41 +504,22 @@ def main() -> None:
         _mapping_panel(exchange_name, st.session_state["mappings"], st.session_state.get("custom_methods", []))
         st.divider()
 
-        # Auto-refresh
+        # A fragment timer lets the page finish rendering before the next refresh.
         import time as _time
-        auto_refresh_opts = {"Desactivado": 0, "30 seg": 30, "1 min": 60, "2 min": 120, "5 min": 300}
-        auto_refresh_sel  = st.selectbox(
-            "🔄 Auto-actualizar cada",
-            list(auto_refresh_opts.keys()),
-            index=0,
-            key="auto_refresh_sel",
-        )
-        auto_refresh_secs = auto_refresh_opts[auto_refresh_sel]
-
-        if "last_auto_refresh" not in st.session_state:
-            st.session_state["last_auto_refresh"] = 0.0
-        if "auto_refresh_trigger" not in st.session_state:
-            st.session_state["auto_refresh_trigger"] = False
-
-        refresh = st.button("Actualizar ahora", use_container_width=True, type="primary")
-
-        # Limpiar trigger después de usarlo
-        if st.session_state["auto_refresh_trigger"]:
-            st.session_state["auto_refresh_trigger"] = False
-            refresh = True
-
-        # Countdown y disparo
-        if auto_refresh_secs > 0:
-            elapsed   = _time.time() - st.session_state["last_auto_refresh"]
-            restante  = int(auto_refresh_secs - elapsed)
-            if elapsed >= auto_refresh_secs:
-                st.session_state["last_auto_refresh"]    = _time.time()
-                st.session_state["auto_refresh_trigger"] = True
-                st.rerun()
-            else:
-                st.caption(f"⏱️ Próxima actualización en {restante}s")
-                _time.sleep(1)
-                st.rerun()
+        auto_refresh_opts={"Desactivado":0,"30 seg":30,"1 min":60,"2 min":120,"5 min":300}
+        auto_refresh_sel=st.selectbox('🔄 Auto-actualizar cada',list(auto_refresh_opts),index=1,key='auto_refresh_sel')
+        auto_refresh_secs=auto_refresh_opts[auto_refresh_sel]
+        refresh=st.button('Actualizar ahora',use_container_width=True,type='primary')
+        if st.session_state.pop('auto_refresh_trigger',False):refresh=True
+        st.session_state.setdefault('last_auto_refresh',_time.time())
+        @st.fragment(run_every=1 if auto_refresh_secs else None)
+        def refresh_timer():
+            if auto_refresh_secs and _time.time()-st.session_state['last_auto_refresh']>=auto_refresh_secs:
+                st.session_state['last_auto_refresh']=_time.time()
+                st.session_state['auto_refresh_trigger']=True
+                st.rerun(scope='app')
+            if auto_refresh_secs:st.caption(f'Actualización automática cada {auto_refresh_secs} segundos')
+        refresh_timer()
 
 
     if exchange_name == "Bybit":
@@ -538,6 +534,11 @@ def main() -> None:
         st.session_state.pop("scan_results", None)
         refresh = True
 
+    selection=(tuple(selected_fiats),tuple(excluded_methods))
+    if st.session_state.get('_last_p2p_selection')!=selection:
+        refresh=True
+        st.session_state['_last_p2p_selection']=selection
+        st.session_state.pop('scan_results',None)
     # ── QUERY ─────────────────────────────────────────────────────────────────
     if refresh or (
         st.session_state["last_exchange"] != exchange_name
@@ -556,17 +557,18 @@ def main() -> None:
                 min_net_profit_pct=min_net, allow_outside_target=allow_out,
                 top_n=top_n,
                 extra_methods=st.session_state.get("custom_methods", []),
-                merchant_check=merchant_check,
+                merchant_check=merchant_check,selected_fiats=selected_fiats,excluded_methods=excluded_methods,
             )
         st.session_state["results"]       = res
         st.session_state["last_update"]   = datetime.now()
         st.session_state["last_exchange"] = exchange_name
         st.session_state["last_asset"] = asset
+        st.session_state["last_auto_refresh"] = _time.time()
 
     results: List[SpreadResult] = st.session_state["results"]
 
     if not results:
-        st.info("Presioná **Actualizar** en el sidebar para comenzar.")
+        st.info("Sin resultados para las monedas y métodos seleccionados. Puedes cambiar los filtros o actualizar.")
         return
 
     if exchange_name == "Bybit":
@@ -703,7 +705,7 @@ def main() -> None:
         )
 
         sc1, sc2, sc3 = st.columns(3)
-        scan_fiats   = sc1.multiselect("Monedas", ["USD", "EUR", "ARS", "UYU", "COP"], default=["USD", "EUR"], key="scan_fiats")
+        scan_fiats   = sc1.multiselect("Monedas", ["USD", "EUR", "ARS", "UYU", "COP"], default=["COP"], key="scan_fiats")
         scan_min_net = sc2.number_input("Umbral net (%)", -50.0, 50.0, 0.0, 0.05, "%.2f", key="scan_min")
         scan_rows    = sc3.slider("Ads por lado", 10, 50, 20, key="scan_rows")
 
@@ -711,6 +713,7 @@ def main() -> None:
             all_scan: List[SpreadResult] = []
             with st.spinner("Escaneando todos los métodos…"):
                 for fiat_s in scan_fiats:
+                    if fiat_s not in selected_fiats:continue
                     try:
                         b_ads = binance_ex.fetch_ads(asset=asset, fiat=fiat_s, trade_type="BUY",  pay_types=[], rows=scan_rows, merchant_check=merchant_check)
                         s_ads = binance_ex.fetch_ads(asset=asset, fiat=fiat_s, trade_type="SELL", pay_types=[], rows=scan_rows, merchant_check=merchant_check)
@@ -729,7 +732,12 @@ def main() -> None:
                             exclude_ads=excl_ads,
                             ad_threshold_pct=ad_thresh,
                         )
-                        all_scan.extend(partial)
+                        aliases=[]
+                        for mid in excluded_methods:
+                            m=catalog_by_id[mid];aliases.append(m['human_name'])
+                            if m.get('_payment_id'):aliases.append(m['_payment_id'])
+                            aliases.extend(st.session_state['mappings'].get(exchange_name.lower(),{}).get(mid,{}).get('payment_ids',[]))
+                        all_scan.extend(r for r in partial if not hidden_method(r.method_human,aliases))
                     except Exception as exc:
                         st.error(f"Error escaneando {fiat_s}: {exc}")
 
@@ -887,6 +895,7 @@ def main() -> None:
                         top_n=top_n,
                         extra_methods=st.session_state.get("custom_methods", []),
                         merchant_check=merchant_check,
+                        selected_fiats=selected_fiats, excluded_methods=excluded_methods,
                     )
                     # Actualizar también los resultados principales de la app
                     st.session_state["results"]     = fresh_res
