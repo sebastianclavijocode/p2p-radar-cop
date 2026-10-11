@@ -107,6 +107,22 @@ def run_queries(
     catalog=filter_catalog(catalog,selected_fiats,excluded_methods)
     for method in catalog:
         mid, mname, fiat = method["id"], method["human_name"], method["fiat"]
+        def _stub(status, msg, _mid=mid, _mname=mname, _fiat=fiat):
+            return SpreadResult(
+                exchange=exchange_name, method_id=_mid, method_human=_mname,
+                method_mapped="—", fiat=_fiat, asset=asset,
+                buy_price_effective=None, sell_price_effective=None,
+                spread_gross_pct=None, net_profit_pct=None,
+                capital_min_fiat=None, capital_max_fiat=None,
+                capital_recommended_fiat=None, capital_recommended_usdt=None,
+                ref_buy_ad=None, ref_sell_ad=None,
+                buy_ads_count=0, sell_ads_count=0,
+                buy_ads_skipped=0, sell_ads_skipped=0,
+                status=status, error_msg=msg,
+                ref_buy_ad_label="—", ref_sell_ad_label="—",
+            )
+
+
         # Custom methods carry their payment_id directly — validate exchange and auto-build mapping config
         if "_payment_id" in method:
             method_exchange = method.get("_exchange", "Binance")
@@ -122,20 +138,6 @@ def run_queries(
         else:
             method_cfg = mappings.get(ex_key, {}).get(mid, {})
 
-        def _stub(status, msg, _mid=mid, _mname=mname, _fiat=fiat):
-            return SpreadResult(
-                exchange=exchange_name, method_id=_mid, method_human=_mname,
-                method_mapped="—", fiat=_fiat, asset=asset,
-                buy_price_effective=None, sell_price_effective=None,
-                spread_gross_pct=None, net_profit_pct=None,
-                capital_min_fiat=None, capital_max_fiat=None,
-                capital_recommended_fiat=None, capital_recommended_usdt=None,
-                ref_buy_ad=None, ref_sell_ad=None,
-                buy_ads_count=0, sell_ads_count=0,
-                buy_ads_skipped=0, sell_ads_skipped=0,
-                status=status, error_msg=msg,
-                ref_buy_ad_label="—", ref_sell_ad_label="—",
-            )
 
         if not method_cfg:
             results.append(_stub("MAPPING_REQUIRED", "Sin configuración de mapeo.")); continue
@@ -1784,4 +1786,5 @@ calculate();
 
 
 
-main()
+if __name__ == "__main__":
+    main()
