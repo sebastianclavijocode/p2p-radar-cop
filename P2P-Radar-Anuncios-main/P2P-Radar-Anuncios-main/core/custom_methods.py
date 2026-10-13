@@ -10,6 +10,27 @@ DATA_DIR = Path(__file__).parent.parent / "data"
 CUSTOM_METHODS_FILE = DATA_DIR / "custom_methods.json"
 
 
+def primary_catalog(exchange='Binance'):
+    """User's selected methods; IDs are specific to each exchange and fiat."""
+    if exchange == 'Binance':
+        entries = [('bancolombia_cop_custom','Bancolombia','COP','BancolombiaSA'),
+                   ('nequi_cop_custom','Nequi','COP','Nequi'),
+                   ('daviplata_cop_custom','Daviplata','COP','Daviplata'),
+                   ('breb_cop_custom','Llaves Bre-B','COP','BreBKeys'),
+                   ('facebank','Facebank','USD','Facebank'),
+                   ('zinli_usd','Zinli','USD','Zinli')]
+    elif exchange == 'Bybit':
+        entries = [('bybit_cop_126','Bancolombia','COP','126'),
+                   ('bybit_cop_209','Nequi','COP','209'),
+                   ('bybit_cop_236','Daviplata','COP','236'),
+                   ('bybit_cop_703','Llaves Bre-B','COP','703'),
+                   ('bybit_usd_189','Zinli','USD','189')]
+    else:
+        entries = []
+    return [{'id':mid,'human_name':name,'fiat':fiat,'_payment_id':pid,'_exchange':exchange}
+            for mid,name,fiat,pid in entries]
+
+
 def load_custom_methods() -> List[Dict[str, Any]]:
     """Retorna lista de métodos custom en el mismo formato que METHODS_CATALOG."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
