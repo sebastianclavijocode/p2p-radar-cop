@@ -104,3 +104,53 @@ def test_radar_always_uses_public_without_reading_credentials(monkeypatch):
     monkeypatch.setattr(bybit,'fetch_public_ads',lambda *args:calls.append(args) or ['public'])
     assert bybit.fetch_ads('USDT','COP','BUY',[],20,merchant_check=True)==['public']
     assert calls[0][3]==[] and calls[0][2]=='BUY'
+
+
+def test_payment_groups_never_mix_banks_and_apply_depth_per_method(monkeypatch):
+    from core.models import P2PAd
+    def quote(name, side, price, pays):
+        return P2PAd(name,side,'USDT','COP',price,1000,10000000,10000,pays,name,'Bybit')
+    books={'BUY':[quote('bank', 'BUY',3100,['126']),quote('shared','BUY',3200,['209','703']),quote('nequi2','BUY',3210,['209'])],
+           'SELL':[quote('nequi','SELL',3300,['209']),quote('bank2','SELL',3000,['126']),quote('unknown','SELL',2990,['999'])]}
+    calls=[]
+    def fetch(asset,fiat,side,pays,rows,merchant_check):
+        calls.append((side,pays,rows,merchant_check))
+        return books[side]
+    monkeypatch.setattr(bybit,'fetch_ads',fetch)
+    catalog,groups=bybit.fetch_payment_groups(rows=1)
+    assert calls==[('BUY',[],300,True),('SELL',[],300,True)]
+    assert groups['bybit_cop_209']['BUY'][0].ad_id=='shared'
+    assert groups['bybit_cop_209']['SELL'][0].ad_id=='nequi'
+    assert groups['bybit_cop_126']['BUY'][0].ad_id=='bank'
+    assert groups['bybit_cop_126']['SELL'][0].ad_id=='bank2'
+    assert groups['bybit_cop_703']['BUY'][0].ad_id=='shared'
+    assert groups['bybit_cop_703']['SELL']==[]
+    assert next(m for m in catalog if m['id']=='bybit_cop_999')['human_name']=='Bybit · pago ID 999'
+    assert groups['bybit_cop_236']=={'BUY':[],'SELL':[]}
+
+
+def test_radar_passes_only_the_same_payment_method_to_spread(monkeypatch):
+    import app
+    from types import SimpleNamespace
+    methods=bybit.payment_catalog(['999'])
+    groups={m['id']:{'BUY':[m['_payment_id']+'-buy'],'SELL':[m['_payment_id']+'-sell']} for m in methods}
+    monkeypatch.setattr(bybit,'fetch_payment_groups',lambda *a:(methods,groups))
+    analyzed=[]
+    def analyze(**kw):
+        analyzed.append(kw)
+        return SimpleNamespace(status='OK',net_profit_pct=1)
+    monkeypatch.setattr(app,'analyze_opportunity',analyze)
+    args=dict(exchange_name='Bybit',asset='USDT',mappings={},is_verified=True,
+              publication_mode='BEAT_TOP',epsilon_fiat=0,epsilon_pct=0,fee_slippage_pct=0,
+              exclude_ads=False,ad_threshold_pct=0,capital_cfg={},buffer_pct=0,
+              min_net_profit_pct=0,allow_outside_target=True,top_n=10,selected_fiats=['COP'],
+              excluded_methods=['bybit_cop_236'])
+    results=app.run_queries(**args)
+    assert len(results)==len(methods)-1
+    for row in analyzed:
+        pid=row['method_mapped']
+        assert row['buy_ads']==[pid+'-buy'] and row['sell_ads']==[pid+'-sell']
+        assert row['method_id']!='bybit_cop_236'
+    monkeypatch.setattr(bybit,'fetch_payment_groups',lambda *a:pytest.fail('No COP selected'))
+    args['selected_fiats']=['USD']
+    assert app.run_queries(**args)==[]
