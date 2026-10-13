@@ -51,6 +51,7 @@ def test_query_exclusions_do_not_request_unwanted_methods(monkeypatch):
     monkeypatch.setitem(app.EXCHANGES,'Test',Exchange())
     monkeypatch.setattr(app,'METHODS_CATALOG',[{'id':'prex','human_name':'Prex','fiat':'UYU'},
                                             {'id':'nequi','human_name':'Nequi','fiat':'COP'}])
+    monkeypatch.setattr(app,'primary_catalog',lambda exchange:app.METHODS_CATALOG)
     args=dict(exchange_name='Test',asset='USDT',mappings={},is_verified=True,
               publication_mode='maker',epsilon_fiat=0,epsilon_pct=0,fee_slippage_pct=0,
               exclude_ads=False,ad_threshold_pct=0,capital_cfg={},buffer_pct=0,
@@ -58,4 +59,4 @@ def test_query_exclusions_do_not_request_unwanted_methods(monkeypatch):
     assert app.run_queries(**args,selected_fiats=['COP'],excluded_methods=['nequi'])==[]
     result=app.run_queries(**args,selected_fiats=['COP'],excluded_methods=['nequi'],
          extra_methods=[{'id':'foreign','human_name':'Custom','fiat':'COP','_payment_id':'1','_exchange':'Binance'}])
-    assert len(result)==1 and result[0].status=='NOT_AVAILABLE'
+    assert result==[]  # Saved custom methods outside the primary list are not queried.

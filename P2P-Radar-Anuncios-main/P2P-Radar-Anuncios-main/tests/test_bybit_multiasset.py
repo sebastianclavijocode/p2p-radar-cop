@@ -129,28 +129,49 @@ def test_payment_groups_never_mix_banks_and_apply_depth_per_method(monkeypatch):
     assert groups['bybit_cop_236']=={'BUY':[],'SELL':[]}
 
 
-def test_radar_passes_only_the_same_payment_method_to_spread(monkeypatch):
+@pytest.mark.parametrize('exchange', ['Binance','Bybit'])
+def test_radar_only_uses_primary_methods_with_exchange_specific_ids(monkeypatch,exchange):
     import app
+    from core.custom_methods import primary_catalog
     from types import SimpleNamespace
-    methods=bybit.payment_catalog(['999'])
-    groups={m['id']:{'BUY':[m['_payment_id']+'-buy'],'SELL':[m['_payment_id']+'-sell']} for m in methods}
-    monkeypatch.setattr(bybit,'fetch_payment_groups',lambda *a:(methods,groups))
+    methods=primary_catalog(exchange)
+    calls=[]
+    def fetch(**kw):
+        calls.append(kw)
+        return [kw['pay_types'][0]+'-'+kw['trade_type']]
+    monkeypatch.setattr(app.EXCHANGES[exchange],'fetch_ads',fetch)
     analyzed=[]
     def analyze(**kw):
         analyzed.append(kw)
         return SimpleNamespace(status='OK',net_profit_pct=1)
     monkeypatch.setattr(app,'analyze_opportunity',analyze)
-    args=dict(exchange_name='Bybit',asset='USDT',mappings={},is_verified=True,
-              publication_mode='BEAT_TOP',epsilon_fiat=0,epsilon_pct=0,fee_slippage_pct=0,
+    excluded=next(m['id'] for m in methods if m['human_name']=='Daviplata')
+    args=dict(exchange_name=exchange,asset='USDT',mappings={},is_verified=True,
+              publication_mode='match_top',epsilon_fiat=0,epsilon_pct=0,fee_slippage_pct=0,
               exclude_ads=False,ad_threshold_pct=0,capital_cfg={},buffer_pct=0,
-              min_net_profit_pct=0,allow_outside_target=True,top_n=10,selected_fiats=['COP'],
-              excluded_methods=['bybit_cop_236'])
+              min_net_profit_pct=0,allow_outside_target=True,top_n=10,selected_fiats=['COP','USD'],
+              excluded_methods=[excluded],extra_methods=[{'id':'unknown','human_name':'Unknown','fiat':'COP'}])
     results=app.run_queries(**args)
     assert len(results)==len(methods)-1
+    assert len(calls)==2*len(results)
     for row in analyzed:
         pid=row['method_mapped']
-        assert row['buy_ads']==[pid+'-buy'] and row['sell_ads']==[pid+'-sell']
-        assert row['method_id']!='bybit_cop_236'
-    monkeypatch.setattr(bybit,'fetch_payment_groups',lambda *a:pytest.fail('No COP selected'))
-    args['selected_fiats']=['USD']
-    assert app.run_queries(**args)==[]
+        assert row['buy_ads']==[pid+'-BUY'] and row['sell_ads']==[pid+'-SELL']
+        assert row['method_id']!=excluded
+        assert row['method_human'] in {'Bancolombia','Nequi','Llaves Bre-B','Zinli','Facebank'}
+    zinli=next(row for row in analyzed if row['method_human']=='Zinli')
+    assert zinli['fiat']=='USD'
+    assert zinli['method_mapped']==('189' if exchange=='Bybit' else 'Zinli')
+    calls.clear()
+    args['selected_fiats']=['EUR']
+    assert app.run_queries(**args)==[] and calls==[]
+
+
+def test_primary_catalog_contains_only_four_cop_methods_and_usd_wallets():
+    from core.custom_methods import primary_catalog
+    for exchange in ('Binance','Bybit'):
+        methods=primary_catalog(exchange)
+        assert {m['human_name'] for m in methods if m['fiat']=='COP'}=={'Bancolombia','Nequi','Daviplata','Llaves Bre-B'}
+        assert all(m['_exchange']==exchange for m in methods)
+        assert len({m['id'] for m in methods})==len(methods)
+        assert all(m['fiat'] in ('COP','USD') for m in methods)
