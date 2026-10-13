@@ -14,7 +14,7 @@ _PUBLIC_ENDPOINT = "https://api2.bybit.com/fiat/otc/item/online"
 BYBIT_PAGOS = {"126":"Bancolombia","209":"Nequi","236":"Daviplata","142":"Davivienda",
                "703":"Bre-B","276":"Banco de Bogotá","740":"BBVA","14":"Transferencia bancaria"}
 _cache = TTLCache(ttl_seconds=30)
-EXCHANGE_NOTE = "Bybit P2P consulta anuncios públicos. Si existen claves, utiliza la API oficial. La disponibilidad depende del servidor y de Bybit."
+EXCHANGE_NOTE = "Bybit P2P consulta anuncios públicos sin utilizar claves. La disponibilidad depende del servidor y de Bybit."
 
 
 def credentials():
@@ -58,6 +58,11 @@ def _parse_ads(items, fiat, asset, exchange='Bybit'):
 
 
 def fetch_ads(asset, fiat, trade_type, pay_types=None, rows=10, max_retries=1, merchant_check=True, amount=""):
+    """The radar uses public ads even when credentials remain saved in Streamlit."""
+    return fetch_public_ads(asset, fiat, trade_type, pay_types, rows, merchant_check, amount)
+
+
+def fetch_signed_ads(asset, fiat, trade_type, pay_types=None, rows=10, max_retries=1, merchant_check=True, amount=""):
     if trade_type not in ("BUY","SELL"):
         raise ValueError("Lado P2P inválido")
     key, secret = credentials()
