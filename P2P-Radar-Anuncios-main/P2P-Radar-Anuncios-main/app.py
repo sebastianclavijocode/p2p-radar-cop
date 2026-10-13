@@ -527,7 +527,7 @@ def main() -> None:
 
 
     if exchange_name == "Bybit":
-        st.info("Bybit consulta anuncios públicos sin claves, o la API oficial si configuraste credenciales. Se respetan el lado de compra/venta, la disponibilidad y los límites del anuncio. El filtro de verificados incluye VA y BA.")
+        st.info("Bybit consulta anuncios públicos sin utilizar claves y compara todos los métodos de pago. Revisa los métodos de cada anuncio antes de operar. Se respetan compra/venta, saldo y límites; el filtro de verificados incluye VA y BA.")
         if not bybit_ex.is_supported():
             st.warning(bybit_ex.EXCHANGE_NOTE)
             st.code('BYBIT_API_KEY = "tu_clave"\nBYBIT_API_SECRET = "tu_secreto"', language="toml")
