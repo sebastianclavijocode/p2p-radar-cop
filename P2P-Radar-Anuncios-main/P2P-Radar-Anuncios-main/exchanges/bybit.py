@@ -62,6 +62,23 @@ def fetch_ads(asset, fiat, trade_type, pay_types=None, rows=10, max_retries=1, m
     return fetch_public_ads(asset, fiat, trade_type, pay_types, rows, merchant_check, amount)
 
 
+def payment_catalog(payment_ids=()):
+    ids = set(BYBIT_PAGOS).union(map(str, payment_ids))
+    return [{'id': 'bybit_cop_' + pid, 'human_name': BYBIT_PAGOS.get(pid, 'Bybit · pago ID ' + pid),
+             'fiat': 'COP', '_payment_id': pid, '_exchange': 'Bybit'}
+            for pid in sorted(ids, key=lambda pid: (pid not in BYBIT_PAGOS, BYBIT_PAGOS.get(pid, pid)))]
+
+
+def fetch_payment_groups(asset='USDT', rows=10, merchant_check=True):
+    """Fetch a broad public book once, then compare only matching payment IDs."""
+    books = {side: fetch_ads(asset, 'COP', side, [], rows=300, merchant_check=merchant_check)
+             for side in ('BUY', 'SELL')}
+    catalog = payment_catalog(p for ads in books.values() for ad in ads for p in ad.payment_methods)
+    groups = {m['id']: {side: [ad for ad in ads if m['_payment_id'] in ad.payment_methods][:rows]
+                        for side, ads in books.items()} for m in catalog}
+    return catalog, groups
+
+
 def fetch_signed_ads(asset, fiat, trade_type, pay_types=None, rows=10, max_retries=1, merchant_check=True, amount=""):
     if trade_type not in ("BUY","SELL"):
         raise ValueError("Lado P2P inválido")
