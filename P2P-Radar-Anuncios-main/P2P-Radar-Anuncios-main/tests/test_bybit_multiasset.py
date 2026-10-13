@@ -26,7 +26,7 @@ def test_signed_read_only_request_and_local_filters(monkeypatch):
             def json(self): return {'retCode':0,'result':{'items':[ad(),ad(payments=['9']),ad(tag='GA'),ad(asset='USDT'),ad(side='0')]}}
         return Response()
     monkeypatch.setattr(bybit.requests, 'post', post)
-    result=bybit.fetch_ads('BTC','COP','BUY',['8'])
+    result=bybit.fetch_signed_ads('BTC','COP','BUY',['8'])
     assert len(result)==1 and result[0].asset=='BTC' and result[0].trade_type=='BUY'
     assert result[0].payment_methods==['8']
 
@@ -34,7 +34,7 @@ def test_signed_read_only_request_and_local_filters(monkeypatch):
 def test_missing_credentials_uses_public_ads(monkeypatch):
     monkeypatch.setattr(bybit,'credentials',lambda:('',''))
     monkeypatch.setattr(bybit,'fetch_public_ads',lambda *a:['public'])
-    assert bybit.fetch_ads('USDT','COP','BUY')==['public']
+    assert bybit.fetch_signed_ads('USDT','COP','BUY')==['public']
 
 
 def test_bybit_block_not_empty_market(monkeypatch):
@@ -42,7 +42,7 @@ def test_bybit_block_not_empty_market(monkeypatch):
     monkeypatch.setattr(bybit,'credentials',lambda:('key','secret'))
     class Response: status_code=403
     monkeypatch.setattr(bybit.requests,'post',lambda *a,**kw:Response())
-    with pytest.raises(RuntimeError,match='HTTP 403'): bybit.fetch_ads('USDT','COP','SELL')
+    with pytest.raises(RuntimeError,match='HTTP 403'): bybit.fetch_signed_ads('USDT','COP','SELL')
 
 
 def test_bybit_code_error_does_not_leak_response(monkeypatch):
@@ -53,7 +53,7 @@ def test_bybit_code_error_does_not_leak_response(monkeypatch):
         def raise_for_status(self): pass
         def json(self): return {'retCode':10005,'retMsg':'do not display secret'}
     monkeypatch.setattr(bybit.requests,'post',lambda *a,**kw:Response())
-    with pytest.raises(RuntimeError,match='sin permisos P2P') as error: bybit.fetch_ads('ETH','COP','SELL')
+    with pytest.raises(RuntimeError,match='sin permisos P2P') as error: bybit.fetch_signed_ads('ETH','COP','SELL')
     assert 'secret' not in str(error.value)
 
 
@@ -95,3 +95,12 @@ def test_public_rejected_query_is_not_empty_market(monkeypatch):
         def json(self):return {'ret_code':100,'ret_msg':'not shown'}
     monkeypatch.setattr(bybit.requests,'post',lambda *a,**k:Response())
     with pytest.raises(RuntimeError,match='rechazada'):bybit.fetch_public_ads()
+
+
+def test_radar_always_uses_public_without_reading_credentials(monkeypatch):
+    def forbidden():raise AssertionError('The public radar must not read secrets')
+    monkeypatch.setattr(bybit,'credentials',forbidden)
+    calls=[]
+    monkeypatch.setattr(bybit,'fetch_public_ads',lambda *args:calls.append(args) or ['public'])
+    assert bybit.fetch_ads('USDT','COP','BUY',[],20,merchant_check=True)==['public']
+    assert calls[0][3]==[] and calls[0][2]=='BUY'
