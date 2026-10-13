@@ -12,7 +12,7 @@ from core.models import P2PAd
 _ENDPOINT = "https://api.bybit.com/v5/p2p/item/online"
 _PUBLIC_ENDPOINT = "https://api2.bybit.com/fiat/otc/item/online"
 BYBIT_PAGOS = {"126":"Bancolombia","209":"Nequi","236":"Daviplata","142":"Davivienda",
-               "703":"Bre-B","276":"Banco de Bogotá","740":"BBVA","14":"Transferencia bancaria"}
+               "703":"Bre-B","276":"Banco de Bogotá","740":"BBVA","14":"Transferencia bancaria","189":"Zinli"}
 _cache = TTLCache(ttl_seconds=30)
 EXCHANGE_NOTE = "Bybit P2P consulta anuncios públicos sin utilizar claves. La disponibilidad depende del servidor y de Bybit."
 
