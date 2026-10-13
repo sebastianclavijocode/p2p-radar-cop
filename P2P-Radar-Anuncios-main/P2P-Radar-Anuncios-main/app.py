@@ -4,6 +4,7 @@ P2P Spread Radar — Bot de Alertas
 Ejecutar: streamlit run app.py
 """
 import json
+from dataclasses import replace
 import logging
 import sys
 import traceback
@@ -806,7 +807,7 @@ def main() -> None:
                 placeholder="Sebastian_Clavijo",
                 key="tg_token"
             )
-            tg_umbral  = st.slider("📊 Umbral mínimo para alertar (% ganancia neta)", 0.25, 5.0, 0.25, 0.05, key="tg_umbral",
+            tg_umbral  = st.slider("📊 Umbral maker-maker (% ganancia neta)", 0.25, 5.0, 0.25, 0.05, key="tg_umbral",
                                    format="%.2f%%",
                                    help="En COP se exige un neto superior a 0,25% después de cubrir al menos 0,50% de comisión total.")
             tg_solo_cop = st.checkbox("🇨🇴 Solo alertar métodos COP", value=True, key="tg_solo_cop")
@@ -826,11 +827,13 @@ def main() -> None:
                 if not ad or not ad.payment_methods: return "—"
                 return ", ".join([m for m in ad.payment_methods if m][:5])
             pct = cop_net(r)
+            fee_text = f"Comisión COP incluida: {max(0.50,r.fee_exchange_pct):.2f}% total\n" if r.fiat == "COP" else ""
             sep = "─" * 28
             return (
                 f"🤖 ALERTA MAKER-MAKER · PUBLICAR ANUNCIOS\n"
                 f"{sep}\n"
                 f"💰 Ganancia neta estimada: {pct:.4f}%\n"
+                f"{fee_text}"
                 f"💱 {r.method_human} ({r.fiat})\n"
                 f"{sep}\n"
                 f"📗 Tu VENTA publicada (referencia tab Comprar)\n"
@@ -981,40 +984,15 @@ def main() -> None:
         st.divider()
         _section("📱", "Vista previa — formato Telegram")
         st.caption("Así se ve el mensaje en tu bot de Telegram.")
-        tg_html = build_telegram_html(results)
-        components.html(tg_html, height=max(len(ok_results) * 480 + 80, 300), scrolling=True)
+        preview_results = [replace(r, net_profit_pct=cop_net(r), fee_exchange_pct=max(0.50,r.fee_exchange_pct) if r.fiat == "COP" else r.fee_exchange_pct) for r in alert_results]
+        tg_html = build_telegram_html(preview_results)
+        components.html(tg_html, height=max(len(preview_results) * 480 + 80, 300), scrolling=True)
 
-        if ok_results:
+        if alert_results:
             st.divider()
             with st.expander("📋 Texto plano para copiar", expanded=False):
-                for r in ok_results:
-                    buy  = r.ref_buy_ad
-                    sell = r.ref_sell_ad
-                    pct  = r.net_profit_pct or 0
-
-                    def pays(ad):
-                        if not ad or not ad.payment_methods: return "—"
-                        return ", ".join([m for m in ad.payment_methods if m][:5])
-
-                    txt = (
-                        f"🤖 Bot de Alertas P2P\n"
-                        f"Diferencia: {pct:.2f}% 💰\n\n"
-                        f"COMPRA P2P\n"
-                        f"🍒 Cripto: {r.asset}\n"
-                        f"🏷️ Vendedor: {buy.advertiser_name if buy else '—'}\n"
-                        f"💵 Precio: {_fmt(r.buy_price_effective, r.fiat)} (1 {r.asset})\n"
-                        f"✅ Disponible: {f'{buy.available_amount:.8f}' if buy else '—'} {r.asset}\n"
-                        f"🔴 Límite: {f'{buy.min_amount:,.2f}' if buy else '—'} – {f'{buy.max_amount:,.2f}' if buy else '—'} {r.fiat}\n"
-                        f"🟰 Métodos: {pays(buy)}\n\n"
-                        f"VENTA P2P\n"
-                        f"🍒 Cripto: {r.asset}\n"
-                        f"🏷️ Vendedor: {sell.advertiser_name if sell else '—'}\n"
-                        f"💵 Precio: {_fmt(r.sell_price_effective, r.fiat)} (1 {r.asset})\n"
-                        f"✅ Disponible: {f'{sell.available_amount:.8f}' if sell else '—'} {r.asset}\n"
-                        f"🔴 Límite: {f'{sell.min_amount:,.2f}' if sell else '—'} – {f'{sell.max_amount:,.2f}' if sell else '—'} {r.fiat}\n"
-                        f"🟰 Métodos: {pays(sell)}"
-                    )
-                    st.code(txt, language="")
+                for r in alert_results:
+                    st.code(_build_tg_message(r), language="")
                     st.divider()
 
     # ── TAB: HOLD 🔵 ──────────────────────────────────────────────────────────
