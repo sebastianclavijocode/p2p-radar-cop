@@ -15,14 +15,14 @@ def cop_net(result):
     net=number(result.net_profit_pct or 0)
     return float(net-max(Decimal(0),COP_COMMISSION_PCT-number(result.fee_exchange_pct or 0))) if result.fiat=='COP' else float(net)
 
-def quote_pair(buy,sell,capital,commission_pct=0.50,fixed_crypto_fee=0.14):
+def quote_pair(buy,sell,capital,commission_pct=0.0,fixed_crypto_fee=0.14):
     """Validate the BUY amount and the different SELL amount after the buy fee.
     The existing fixed fee is split equally between buy and sell.
     API advertisement limits do not establish account/KYC eligibility.
     """
     try:
-        capital=number(capital);fee=max(COP_COMMISSION_PCT,number(commission_pct));fixed=number(fixed_crypto_fee)
-        if capital<=0 or fixed<0:return None
+        capital=number(capital);fee=number(commission_pct);fixed=number(fixed_crypto_fee)
+        if capital<=0 or fixed<0 or fee<0:return None
         for ad in (buy,sell):
             if value(ad,'is_ad',False):return None
         if value(buy,'asset')!=value(sell,'asset') or value(buy,'fiat')!='COP' or value(sell,'fiat')!='COP':return None
@@ -42,8 +42,8 @@ def quote_pair(buy,sell,capital,commission_pct=0.50,fixed_crypto_fee=0.14):
                     commission_pct=float(fee),fixed_crypto_fee=float(fixed),_net=net)
     except (InvalidOperation,ValueError,TypeError,ZeroDivisionError):return None
 
-def best_taker_pair(buy_ads,sell_ads,capital,threshold=0.25,commission_pct=0.50,fixed_crypto_fee=0.14):
-    threshold=max(COP_MIN_NET_PCT,number(threshold))
+def best_taker_pair(buy_ads,sell_ads,capital,threshold=None,commission_pct=0.0,fixed_crypto_fee=0.14):
+    threshold=Decimal(0) if threshold is None else number(threshold)
     feasible=[]
     for buy in buy_ads:
         for sell in sell_ads:
