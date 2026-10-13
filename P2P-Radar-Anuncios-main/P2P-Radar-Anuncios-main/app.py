@@ -17,7 +17,7 @@ import streamlit.components.v1 as components
 
 sys.path.insert(0, ".")
 
-from core.custom_methods import add_custom_method, load_custom_methods, save_custom_methods
+from core.custom_methods import add_custom_method, load_custom_methods, save_custom_methods, primary_catalog
 from core.mapping import DEFAULT_MAPPINGS, load_mappings, save_mappings
 from core.models import METHODS_CATALOG, SpreadResult
 from core.scanner import scan_all_methods
@@ -101,15 +101,7 @@ def run_queries(
     exchange_mod = EXCHANGES[exchange_name]
     ex_key = exchange_name.lower()
     results: List[SpreadResult] = []
-    catalog = METHODS_CATALOG + extra_methods
-    bybit_groups, bybit_error = {}, None
-    if exchange_name == "Bybit":
-        catalog = bybit_ex.payment_catalog()
-        if selected_fiats is None or 'COP' in selected_fiats:
-            try:
-                catalog, bybit_groups = bybit_ex.fetch_payment_groups(asset, top_n, merchant_check)
-            except Exception as exc:
-                bybit_error = exc
+    catalog = primary_catalog(exchange_name)
 
     catalog=filter_catalog(catalog,selected_fiats,excluded_methods)
     for method in catalog:
@@ -157,13 +149,8 @@ def run_queries(
         method_mapped = ", ".join(pay_ids) if pay_ids else "—"
 
         try:
-            if exchange_name == 'Bybit':
-                if bybit_error is not None: raise bybit_error
-                buy_ads = bybit_groups[mid]['BUY']
-                sell_ads = bybit_groups[mid]['SELL']
-            else:
-                buy_ads  = exchange_mod.fetch_ads(asset=asset, fiat=fiat, trade_type="BUY",  pay_types=pay_ids, rows=top_n, merchant_check=merchant_check)
-                sell_ads = exchange_mod.fetch_ads(asset=asset, fiat=fiat, trade_type="SELL", pay_types=pay_ids, rows=top_n, merchant_check=merchant_check)
+            buy_ads  = exchange_mod.fetch_ads(asset=asset, fiat=fiat, trade_type="BUY",  pay_types=pay_ids, rows=top_n, merchant_check=merchant_check)
+            sell_ads = exchange_mod.fetch_ads(asset=asset, fiat=fiat, trade_type="SELL", pay_types=pay_ids, rows=top_n, merchant_check=merchant_check)
         except Exception as exc:
             logger.error(f"{exchange_name} [{mid}]: {exc}\n{traceback.format_exc()}")
             results.append(_stub("ERROR", str(exc)[:120])); continue
@@ -207,20 +194,13 @@ def _mapping_panel(exchange_name: str, mappings: Dict, custom_methods: List[dict
     with st.expander("Métodos de pago configurados", expanded=False):
         st.caption(
             "Estos son los metodos de pago que el radar monitorea. "
-            "Para agregar nuevos, usá la pestaña Diagnóstico → Descubrir métodos."
+            "Por ahora se incluyen solo tus métodos principales."
         )
-        catalog_rows = [{
-            "Metodo": m["human_name"], "Fiat": m["fiat"],
-            "Activo": "Si",
-            "ID en Binance": ", ".join(ex_cfg.get(m["id"], {}).get("payment_ids", [])) or "--",
-        } for m in METHODS_CATALOG if ex_cfg.get(m["id"], {}).get("available", False)]
-        custom_rows = [{
-            "Metodo": m["human_name"], "Fiat": m["fiat"],
-            "Activo": "Si",
-            "ID en Binance": m["_payment_id"],
-        } for m in custom_methods]
+        catalog_rows = [{"Metodo":m["human_name"], "Fiat":m["fiat"], "ID en "+exchange_name:m["_payment_id"]}
+                        for m in primary_catalog(exchange_name)]
         from ui.table import _html_table
-        st.markdown(_html_table(catalog_rows + custom_rows), unsafe_allow_html=True)
+        st.markdown(_html_table(catalog_rows), unsafe_allow_html=True)
+
 
 
 
@@ -421,7 +401,7 @@ def main() -> None:
         with st.expander("Monedas y métodos que uso",expanded=True):
             selected_fiats=st.multiselect('Monedas del radar P2P',['COP','USD','EUR','ARS','UYU'],default=['COP','USD','EUR'],key='cfg-p2p-fiats')
             catalog=METHODS_CATALOG+st.session_state.get('custom_methods',[])
-            catalog += bybit_ex.payment_catalog()
+            catalog += primary_catalog('Binance')+primary_catalog('Bybit')
             catalog_by_id={m['id']:m for m in catalog}
             defaults=[m['id'] for m in catalog if 'prex' in m['human_name'].casefold() or 'mercado pago' in m['human_name'].casefold()]
             current=st.session_state.get('cfg-p2p-excluded-methods')
@@ -538,7 +518,7 @@ def main() -> None:
 
 
     if exchange_name == "Bybit":
-        st.info("Bybit consulta anuncios públicos sin utilizar claves. Cada brecha se calcula por separado para el mismo método de pago: Nequi, Bancolombia, Daviplata y los demás disponibles. Se respetan compra/venta, saldo y límites; el filtro de verificados incluye VA y BA.")
+        st.info("Bybit consulta anuncios públicos sin claves. Solo se comparan Bancolombia, Nequi, Daviplata y Llaves Bre-B en COP, y Zinli en USD. Cada brecha usa el mismo método de pago en ambos lados y respeta saldo, límites y filtro de verificados.")
         if not bybit_ex.is_supported():
             st.warning(bybit_ex.EXCHANGE_NOTE)
             st.code('BYBIT_API_KEY = "tu_clave"\nBYBIT_API_SECRET = "tu_secreto"', language="toml")
@@ -589,7 +569,7 @@ def main() -> None:
     if exchange_name == "Bybit":
         for message in dict.fromkeys(r.error_msg for r in results if r.status == "ERROR" and r.error_msg):
             st.error(message)
-        st.caption("Brechas COP separadas por método de pago. Se consultan hasta 300 anuncios por lado y se analizan los primeros de cada método según tu filtro. Los métodos sin nombre conocido aparecen con su ID de Bybit.")
+        st.caption("Se consulta cada método por separado, con los IDs propios de Bybit. Selecciona COP y USD en la barra lateral para incluir Zinli.")
     ok_results = [r for r in results if r.status == "OK"]
     disc_count = len(results) - len(ok_results)
 
@@ -718,51 +698,22 @@ def main() -> None:
 
     # ── TAB: ESCANEO AUTOMÁTICO ───────────────────────────────────────────────
     with tab_scan:
-        _section("🔁", "Escaneo automático — todos los métodos")
-        st.caption(
-            "Escanea Binance P2P sin filtro de método de pago. "
-            "Detecta spreads en CUALQUIER método disponible. "
-            "No necesita configuración de catálogo."
-        )
-
-        sc1, sc2, sc3 = st.columns(3)
-        scan_fiats   = sc1.multiselect("Monedas", ["USD", "EUR", "ARS", "UYU", "COP"], default=["COP"], key="scan_fiats")
-        scan_min_net = sc2.number_input("Umbral net (%)", -50.0, 50.0, 0.0, 0.05, "%.2f", key="scan_min")
-        scan_rows    = sc3.slider("Ads por lado", 10, 50, 20, key="scan_rows")
-
-        if st.button("🔁 Escanear ahora", use_container_width=True, type="primary", key="scan_btn"):
-            all_scan: List[SpreadResult] = []
-            with st.spinner("Escaneando todos los métodos…"):
-                for fiat_s in scan_fiats:
-                    if fiat_s not in selected_fiats:continue
-                    try:
-                        b_ads = binance_ex.fetch_ads(asset=asset, fiat=fiat_s, trade_type="BUY",  pay_types=[], rows=scan_rows, merchant_check=merchant_check)
-                        s_ads = binance_ex.fetch_ads(asset=asset, fiat=fiat_s, trade_type="SELL", pay_types=[], rows=scan_rows, merchant_check=merchant_check)
-                        scan_fee_cfg = BINANCE_MAKER_FEES.get(fiat_s, {"verified": 0.0, "non_verified": 0.0})
-                        scan_fee = scan_fee_cfg["verified"] if is_verified else scan_fee_cfg["non_verified"]
-                        cap_cfg_s = caps.get(fiat_s, DEFAULT_CAPITAL.get(fiat_s, {"target_min": 200, "target_max": 2000, "simulado": 500}))
-                        partial = scan_all_methods(
-                            buy_ads_raw=b_ads, sell_ads_raw=s_ads,
-                            fiat=fiat_s, asset=asset,
-                            exchange=exchange_name,
-                            fee_exchange_pct=scan_fee,
-                            capital_target_min=cap_cfg_s["target_min"],
-                            capital_target_max=cap_cfg_s["target_max"],
-                            capital_simulado=cap_cfg_s["simulado"],
-                            min_spread_pct=scan_min_net,
-                            exclude_ads=excl_ads,
-                            ad_threshold_pct=ad_thresh,
-                        )
-                        aliases=[]
-                        for mid in excluded_methods:
-                            m=catalog_by_id[mid];aliases.append(m['human_name'])
-                            if m.get('_payment_id'):aliases.append(m['_payment_id'])
-                            aliases.extend(st.session_state['mappings'].get(exchange_name.lower(),{}).get(mid,{}).get('payment_ids',[]))
-                        all_scan.extend(r for r in partial if not hidden_method(r.method_human,aliases))
-                    except Exception as exc:
-                        st.error(f"Error escaneando {fiat_s}: {exc}")
-
-            st.session_state["scan_results"] = all_scan
+        _section("🔁", "Escaneo — métodos principales")
+        st.caption(f"Escanea {exchange_name} con tus métodos principales. Cada método se compara por separado; no se añaden bancos ni IDs desconocidos.")
+        sc1,sc2,sc3=st.columns(3)
+        scan_fiats=sc1.multiselect("Monedas",["COP","USD","EUR","ARS","UYU"],default=["COP"],key="scan_fiats")
+        scan_min_net=sc2.number_input("Umbral net (%)",-50.0,50.0,0.0,0.05,"%.2f",key="scan_min")
+        scan_rows=sc3.slider("Ads por lado",10,50,20,key="scan_rows")
+        if st.button("🔁 Escanear ahora",use_container_width=True,type="primary",key="scan_btn"):
+            with st.spinner(f"Escaneando métodos principales de {exchange_name}…"):
+                st.session_state["scan_results"]=run_queries(
+                    exchange_name=exchange_name,asset=asset,mappings=st.session_state["mappings"],
+                    is_verified=is_verified,publication_mode="match_top",epsilon_fiat=0,epsilon_pct=0,
+                    fee_slippage_pct=fee_slippage_pct,exclude_ads=excl_ads,ad_threshold_pct=ad_thresh,
+                    capital_cfg=caps,buffer_pct=buf_pct,min_net_profit_pct=scan_min_net,
+                    allow_outside_target=True,top_n=min(scan_rows,20) if exchange_name=="Binance" else scan_rows,
+                    merchant_check=merchant_check,selected_fiats=[f for f in scan_fiats if f in selected_fiats],
+                    excluded_methods=excluded_methods)
 
         scan_results: List[SpreadResult] = st.session_state.get("scan_results", [])
 
@@ -1531,8 +1482,8 @@ calculate();
         _section("🔬", "Diagnóstico — todos los métodos")
         st.caption(
             "Esta tabla muestra datos brutos de TODOS los métodos sin importar el umbral. "
-            "'NO_ADS' con 0 anuncios = ID de pago incorrecto. "
-            "Usá el botón de abajo para descubrir los IDs reales de Binance."
+            "'NO_ADS' indica que no se encontraron anuncios compatibles con tus filtros. "
+            "El escaneo usa únicamente los métodos principales del exchange seleccionado."
         )
 
         diag_rows = []
@@ -1555,231 +1506,15 @@ calculate();
             st.markdown(_html_table(diag_rows), unsafe_allow_html=True)
 
         st.divider()
-        _section("🔎", "Buscar método de pago por nombre")
-        st.caption(
-            "Ingresá el nombre exacto (o parcial) del método de pago tal como aparece en Binance. "
-            "Se consultan ambas tabs (Comprar y Vender) y si hay anuncios podés agregarlo al radar."
-        )
-        pm_col1, pm_col2, pm_col3 = st.columns([3, 1, 1])
-        pm_search_name = pm_col1.text_input(
-            "Nombre del método de pago",
-            placeholder="Ej: WallyTech, Zinli, Facebank...",
-            key="pm_search_name",
-        )
-        pm_search_fiat = pm_col2.selectbox("Moneda", ["USD", "ARS", "EUR", "UYU", "COP"], key="pm_search_fiat")
-        pm_search_rows = pm_col3.slider("Ads a traer", 10, 50, 20, key="pm_search_rows")
-
-        if st.button("🔎 Buscar método", type="primary", key="pm_search_btn"):
-            if not pm_search_name.strip():
-                st.warning("Ingresá un nombre de método de pago.")
-            else:
-                with st.spinner(f"Buscando '{pm_search_name}' en {pm_search_fiat}…"):
-                    try:
-                        pm_buy  = binance_ex.fetch_ads(asset=asset, fiat=pm_search_fiat, trade_type="BUY",
-                                                       pay_types=[pm_search_name.strip()], rows=pm_search_rows,
-                                                       merchant_check=False)
-                        pm_sell = binance_ex.fetch_ads(asset=asset, fiat=pm_search_fiat, trade_type="SELL",
-                                                       pay_types=[pm_search_name.strip()], rows=pm_search_rows,
-                                                       merchant_check=False)
-                        # Recolectar todos los IDs reales encontrados
-                        real_ids: set = set()
-                        for ad in pm_buy + pm_sell:
-                            for m in ad.payment_methods:
-                                if m and pm_search_name.strip().lower() in m.lower():
-                                    real_ids.add(m)
-                        st.session_state["pm_search_result"] = {
-                            "name": pm_search_name.strip(),
-                            "fiat": pm_search_fiat,
-                            "buy_count": len(pm_buy),
-                            "sell_count": len(pm_sell),
-                            "real_ids": sorted(real_ids),
-                            "sample_buy":  [{"Anunciante": a.advertiser_name, "Precio": f"{a.price:,.4f} {pm_search_fiat}",
-                                             "Disponible": f"{a.available_amount:,.2f} {asset}",
-                                             "Métodos": ", ".join(a.payment_methods[:3])} for a in pm_buy[:5]],
-                            "sample_sell": [{"Anunciante": a.advertiser_name, "Precio": f"{a.price:,.4f} {pm_search_fiat}",
-                                             "Disponible": f"{a.available_amount:,.2f} {asset}",
-                                             "Métodos": ", ".join(a.payment_methods[:3])} for a in pm_sell[:5]],
-                        }
-                    except Exception as exc:
-                        st.error(f"Error buscando: {exc}")
-
-        if "pm_search_result" in st.session_state:
-            res_pm = st.session_state["pm_search_result"]
-            buy_c, sell_c = res_pm["buy_count"], res_pm["sell_count"]
-            real_ids = res_pm["real_ids"]
-
-            if buy_c == 0 and sell_c == 0:
-                st.error(f"No se encontraron anuncios para '{res_pm['name']}' en {res_pm['fiat']}. Verificá el nombre exacto.")
-            else:
-                st.success(f"✅ '{res_pm['name']}' en {res_pm['fiat']}: **{buy_c}** anuncios en tab Comprar · **{sell_c}** en tab Vender")
-                if real_ids:
-                    st.info(f"IDs reales encontrados en Binance: `{'`, `'.join(real_ids)}`")
-                from ui.table import _html_table
-                rc1, rc2 = st.columns(2)
-                with rc1:
-                    st.caption("Tab Comprar (anunciantes vendiendo)")
-                    if res_pm["sample_buy"]:
-                        st.markdown(_html_table(res_pm["sample_buy"]), unsafe_allow_html=True)
-                with rc2:
-                    st.caption("Tab Vender (anunciantes comprando)")
-                    if res_pm["sample_sell"]:
-                        st.markdown(_html_table(res_pm["sample_sell"]), unsafe_allow_html=True)
-
-                st.markdown("**Agregar al radar**")
-                add2_col1, add2_col2, add2_col3 = st.columns(3)
-                id_options = real_ids if real_ids else [res_pm["name"]]
-                sel_real_id  = add2_col1.selectbox("ID real en Binance", id_options, key="pm_add_real_id")
-                add2_name    = add2_col2.text_input("Nombre visible", value=res_pm["name"], key="pm_add_name")
-                add2_fiat    = add2_col3.selectbox("Moneda", ["USD", "ARS", "EUR", "UYU", "COP"],
-                                                   index=["USD","ARS","EUR","UYU","COP"].index(res_pm["fiat"])
-                                                   if res_pm["fiat"] in ["USD","ARS","EUR","UYU","COP"] else 0,
-                                                   key="pm_add_fiat")
-                if st.button("➕ Agregar al radar", type="primary", key="pm_add_btn"):
-                    method_id = sel_real_id.lower().replace(" ", "_").replace("-", "_")
-                    custom = st.session_state.get("custom_methods", [])
-                    already = any(m["id"] == method_id for m in custom) or \
-                              any(m["id"] == method_id for m in METHODS_CATALOG)
-                    if already:
-                        st.warning(f"'{add2_name}' ya está en el radar.")
-                    else:
-                        custom = add_custom_method(custom, method_id, add2_name, add2_fiat, sel_real_id, exchange=exchange_name)
-                        save_custom_methods(custom)
-                        st.session_state["custom_methods"] = custom
-                        st.success(f"✅ '{add2_name}' agregado. Presioná **Actualizar** para incluirlo.")
-                        st.rerun()
-
-        st.divider()
-        _section("🔍", "Descubrir métodos de pago disponibles en Binance")
-        st.caption(
-            "Escanea Binance SIN filtro de comerciante para ver TODOS los métodos disponibles. "
-            "Desde acá podés agregar cualquiera al radar con un click."
-        )
-        disc_fiats = st.multiselect(
-            "Monedas a escanear",
-            ["USD", "EUR", "ARS", "UYU", "COP"],
-            default=["USD"],
-            key="disc_fiats",
-            help="Seleccioná una o varias monedas. Cada moneda hace 2 consultas a Binance."
-        )
-        disc_pm_filter = st.text_input(
-            "Filtrar por método de pago (opcional)",
-            placeholder="Ej: Prex, Zinli, Facebank… — dejá vacío para ver todos",
-            key="disc_pm_filter",
-        )
-        disc_n = st.slider("Anuncios por moneda", 5, 20, 20, key="disc_n")
-        if st.button("🔍 Escanear métodos disponibles", key="disc_btn"):
-            if not disc_fiats:
-                st.warning("Seleccioná al menos una moneda.")
-            else:
-                import time as _time
-                all_by_fiat: Dict[str, Dict[str, int]] = {}
-                errors = []
-                prog = st.progress(0, text="Iniciando…")
-                total = len(disc_fiats)
-                for i, fiat_d in enumerate(disc_fiats):
-                    prog.progress((i) / total, text=f"Consultando {fiat_d}…")
-                    try:
-                        # merchant_check=False: descubrimiento completo sin restricción de merchants
-                        # (merchantCheck=True + rows>30 da error 000002 en la API de Binance)
-                        buy_raw  = binance_ex.fetch_ads(asset=asset, fiat=fiat_d, trade_type="BUY",  pay_types=[], rows=disc_n, merchant_check=False)
-                        _time.sleep(1.5)
-                        sell_raw = binance_ex.fetch_ads(asset=asset, fiat=fiat_d, trade_type="SELL", pay_types=[], rows=disc_n, merchant_check=False)
-                        _time.sleep(1.5)
-                        methods: Dict[str, int] = {}
-                        for ad in buy_raw + sell_raw:
-                            for pm in ad.payment_methods:
-                                if pm:
-                                    methods[pm] = methods.get(pm, 0) + 1
-                        if methods:
-                            all_by_fiat[fiat_d] = methods
-                        else:
-                            errors.append(f"{fiat_d}: sin anuncios retornados por Binance")
-                    except Exception as exc:
-                        errors.append(f"{fiat_d}: {exc}")
-                prog.progress(1.0, text="Listo")
-
-                if errors:
-                    for e in errors:
-                        st.error(e)
-
-                combined = []
-                for fiat_d, methods in all_by_fiat.items():
-                    for pm, count in sorted(methods.items(), key=lambda x: x[1], reverse=True):
-                        combined.append({"Moneda": fiat_d, "Método de pago": pm, "Anuncios activos (liquidez)": count})
-
-                if combined:
-                    st.session_state["disc_methods_v2"] = combined
-                else:
-                    st.warning(
-                        "Sin resultados. Posibles causas: Binance bloqueó la consulta (rate limit), "
-                        "la moneda no tiene anuncios activos, o hubo un error de red. "
-                        "Esperá 30 segundos y volvé a intentar."
-                    )
-
-        if "disc_methods_v2" in st.session_state:
-            combined = st.session_state["disc_methods_v2"]
-            pm_filter = st.session_state.get("disc_pm_filter", "").strip().lower()
-            filtered_combined = [r for r in combined if pm_filter in r["Método de pago"].lower()] if pm_filter else combined
-            st.success(f"✅ {len(filtered_combined)} método{'s' if len(filtered_combined) != 1 else ''} {'que coinciden' if pm_filter else 'encontrados'} ({len(combined)} total)")
-            from ui.table import _html_table
-            st.markdown(_html_table(filtered_combined), unsafe_allow_html=True)
-            method_ids = list(dict.fromkeys(r["Método de pago"] for r in filtered_combined))
-            disc_fiat_sel = filtered_combined[0]["Moneda"] if filtered_combined else "USD"
-
-            st.divider()
-            st.markdown("**Agregar método al radar**")
-            st.caption("Seleccioná un método de la lista para monitorearlo.")
-            add_col1, add_col2, add_col3 = st.columns(3)
-            sel_pm   = add_col1.selectbox("Método de pago", method_ids, key="add_pm")
-            # Auto-detect fiat from the combined results
-            auto_fiat = next((r["Moneda"] for r in combined if r["Método de pago"] == sel_pm), disc_fiat_sel)
-            add_name = add_col2.text_input("Nombre visible", value=sel_pm, key="add_name")
-            add_fiat = add_col3.selectbox("Moneda", ["USD", "ARS", "EUR", "UYU", "COP"],
-                                          index=["USD","ARS","EUR","UYU","COP"].index(auto_fiat)
-                                          if auto_fiat in ["USD","ARS","EUR","UYU","COP"] else 0,
-                                          key="add_fiat")
-
-            if st.button("➕ Agregar al radar", type="primary", key="add_method_btn"):
-                method_id = sel_pm.lower().replace(" ", "_").replace("-", "_")
-                custom = st.session_state.get("custom_methods", [])
-                already = any(m["id"] == method_id for m in custom) or \
-                          any(m["id"] == method_id for m in METHODS_CATALOG)
-                if already:
-                    st.warning(f"'{add_name}' ya está en el radar.")
-                else:
-                    custom = add_custom_method(custom, method_id, add_name, add_fiat, sel_pm, exchange=exchange_name)
-                    save_custom_methods(custom)
-                    st.session_state["custom_methods"] = custom
-                    st.success(f"✅ '{add_name}' agregado. Presioná **Actualizar** para incluirlo en el análisis.")
-                    st.rerun()
-
-        # Métodos custom activos
-        custom_active = st.session_state.get("custom_methods", [])
-        if custom_active:
-            st.divider()
-            st.markdown("**Métodos personalizados activos**")
-            header = st.columns([3, 1, 2, 1])
-            header[0].markdown("**Método**")
-            header[1].markdown("**Fiat**")
-            header[2].markdown("**ID Binance**")
-            header[3].markdown("")
-            to_delete = None
-            for i, m in enumerate(custom_active):
-                cols = st.columns([3, 1, 2, 1])
-                cols[0].write(m["human_name"])
-                cols[1].write(m["fiat"])
-                cols[2].write(m["_payment_id"])
-                if cols[3].button("🗑️", key=f"del_m_{i}", help=f"Eliminar {m['human_name']}"):
-                    to_delete = i
-            if to_delete is not None:
-                custom_active.pop(to_delete)
-                save_custom_methods(custom_active)
-                st.session_state["custom_methods"] = custom_active
-                st.rerun()
-            if st.button("🗑️ Eliminar todos los personalizados", key="del_custom"):
-                st.session_state["custom_methods"] = []
-                save_custom_methods([])
-                st.rerun()
+        _section("🔍", f"Métodos principales activos · {exchange_name}")
+        st.caption("COP: Bancolombia, Nequi, Daviplata y Llaves Bre-B. USD: Zinli; Facebank también está incluido en Binance. No necesitas agregarlos manualmente.")
+        active_methods=filter_catalog(primary_catalog(exchange_name),selected_fiats,excluded_methods)
+        from ui.table import _html_table
+        st.markdown(_html_table([{"Método":m["human_name"],"Fiat":m["fiat"],"ID "+exchange_name:m["_payment_id"]}
+                                for m in active_methods]),unsafe_allow_html=True)
+        if st.button("🔍 Escanear métodos principales",key="disc_primary_btn"):
+            st.session_state["last_exchange"]=None
+            st.rerun()
 
 
 
