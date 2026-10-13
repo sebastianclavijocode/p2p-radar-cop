@@ -61,3 +61,22 @@ def test_higher_old_secret_does_not_suppress_requested_quarter_percent(monkeypat
     import importlib,alert_bot
     monkeypatch.setenv('UMBRAL_PCT','0.50')
     assert importlib.reload(alert_bot).UMBRAL_PCT==0.25
+
+
+def test_bot_sends_only_executable_taker_not_rejected_headline(monkeypatch):
+    from types import SimpleNamespace
+    import alert_bot as bot
+    buys=[ad(3900,minimum=5000000,name='not executable'),ad(4000,name='valid advertiser')]
+    sells=[ad(4002)]
+    monkeypatch.setattr(bot,'TG_USERNAME','test-only')
+    monkeypatch.setattr(bot,'GH_PAT','')
+    monkeypatch.setattr(bot,'METODOS_COP',[{'id':'test','human_name':'Nequi','fiat':'COP','payment_id':'Nequi'}])
+    monkeypatch.setattr(bot.binance,'fetch_ads',lambda **kw:buys if kw['trade_type']=='BUY' else sells)
+    monkeypatch.setattr(bot,'analyze_opportunity',lambda **kw:SimpleNamespace(net_profit_pct=0,status='FILTERED_NET',spread_gross_pct=0,buy_price_effective=4000,sell_price_effective=4001))
+    monkeypatch.setattr(bot.time,'sleep',lambda seconds:None)
+    messages=[]
+    monkeypatch.setattr(bot,'send_telegram',lambda username,text:messages.append(text) or True)
+    bot.main()
+    assert len(messages)==1
+    assert 'valid advertiser' in messages[0] and 'not executable' not in messages[0]
+    assert 'TAKER-TAKER' in messages[0] and '%' not in messages[0]
