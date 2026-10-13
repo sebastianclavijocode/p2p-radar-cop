@@ -21,6 +21,7 @@ PROJECT_DIR = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_DIR))
 
 from core.spread import analyze_opportunity
+from core.p2p_alerts import best_taker_pair
 from exchanges import binance
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -28,8 +29,8 @@ logger = logging.getLogger("alert_bot")
 
 # ── Config ────────────────────────────────────────────────────────────────────
 TG_USERNAME   = os.environ.get("TG_USERNAME", "")
-UMBRAL_PCT    = float(os.environ.get("UMBRAL_PCT", "0.15"))
-MAKER_FEE_COP = float(os.environ.get("MAKER_FEE_COP", "0.25"))
+UMBRAL_PCT    = 0.25  # User policy for COP; old GitHub secrets must not override it.
+MAKER_FEE_COP = max(0.50, float(os.environ.get("MAKER_FEE_COP") or "0.50"))
 GH_PAT        = os.environ.get("GH_PAT", "")
 
 GH_REPO       = "sebastianclavijocode/p2p-radar-cop"
@@ -269,15 +270,17 @@ def build_maker_message(result, pct) -> str:
 
     return (
         f"🤖 ALERTA P2P RADAR\n{sep}\n"
-        f"💰 Ganancia neta: {pct:.2f}%\n"
+        f"💰 Ganancia neta estimada: {pct:.4f}%\n"
+        f"💳 Comisión total incluida: {MAKER_FEE_COP:.2f}%\n"
+        f"Estrategia maker-maker: requiere publicar anuncios, no ejecución inmediata.\n"
         f"💱 {result.method_human} ({result.fiat})\n{sep}\n"
-        f"📗 COMPRAR (tab Comprar)\n"
+        f"📗 Precio de tu VENTA publicada (referencia tab Comprar)\n"
         f"👤 {buy_name if buy else '—'}\n"
         f"💵 {fmt(result.buy_price_effective)} {result.fiat} / {result.asset}\n"
         f"🔴 {f'{float(buy_min):,.0f}' if buy_min else '—'} – "
         f"{f'{float(buy_max):,.0f}' if buy_max else '—'} {result.fiat}\n"
         f"💳 {pays(buy)}\n{sep}\n"
-        f"📕 VENDER (tab Vender)\n"
+        f"📕 Precio de tu COMPRA publicada (referencia tab Vender)\n"
         f"👤 {sell_name if sell else '—'}\n"
         f"💵 {fmt(result.sell_price_effective)} {result.fiat} / {result.asset}\n"
         f"🔴 {f'{float(sell_min):,.0f}' if sell_min else '—'} – "
@@ -286,19 +289,20 @@ def build_maker_message(result, pct) -> str:
     )
 
 
-def build_taker_message(metodo, taker_buy, taker_sell, ganancia_cop, cantidad_usdt) -> str:
-    sep = "─" * 28
-
+def build_taker_message(metodo, quote) -> str:
+    buy,sell=quote['buy'],quote['sell']
     return (
-        f"🟠 ALERTA TAKER-TAKER\n{sep}\n"
-        f"💱 {metodo['human_name']} ({metodo['fiat']})\n"
-        f"⚡ Compra y venta directa SIN anuncio\n{sep}\n"
-        f"📗 COMPRÁ directamente a: {taker_buy:,.2f} {metodo['fiat']}\n"
-        f"📕 VENDÉ directamente a:  {taker_sell:,.2f} {metodo['fiat']}\n"
-        f"📦 Cantidad aprox: {cantidad_usdt:.1f} USDT\n"
-        f"💰 Ganancia estimada: {ganancia_cop:,.0f} {metodo['fiat']}\n"
-        f"💳 Comisión fija: $0.14 USDT\n{sep}\n"
-        f"⚠️ Actuar rápido — precio puede cambiar"
+        f"🟠 ALERTA TAKER-TAKER · COP\n"
+        f"💱 {metodo['human_name']} · {ASSET}\n"
+        f"📗 Comprar a {ad_value(buy,'advertiser_name','—')}: {ad_price(buy):,.2f} COP\n"
+        f"📕 Vender a {ad_value(sell,'advertiser_name','—')}: {ad_price(sell):,.2f} COP\n"
+        f"💵 Capital validado: {quote['capital']:,.0f} COP\n"
+        f"📦 Compra {quote['quantity']:.6f} · venta {quote['sell_quantity']:.6f} {ASSET}\n"
+                f"💳 Costo fijo estimado incluido: {quote['fixed_crypto_fee']:.2f} {ASSET}\n"
+        f"💰 Beneficio estimado: {quote['profit']:,.0f} COP\n"
+        f"Compra: límites {ad_value(buy,'min_amount'):,.0f}–{ad_value(buy,'max_amount'):,.0f} COP\n"
+        f"Venta: límites {ad_value(sell,'min_amount'):,.0f}–{ad_value(sell,'max_amount'):,.0f} COP\n"
+        f"Límites y saldo del anuncio comprobados; revisa requisitos de cuenta y que siga disponible."
     )
 
 
@@ -400,14 +404,14 @@ def main():
             logger.error(f"    Error analyze_opportunity: {e}")
             continue
 
-        pct = result.net_profit_pct or 0
+        pct = round(result.net_profit_pct or 0, 10)
 
         logger.info(
-            f"    Maker | Spread: {result.spread_gross_pct:.4f}% | "
+            f"    Maker | Spread: {result.spread_gross_pct or 0:.4f}% | "
             f"Neto: {pct:.4f}% | Status: {result.status}"
         )
 
-        if result.status == "OK" and pct >= UMBRAL_PCT:
+        if result.status == "OK" and pct > UMBRAL_PCT:
             logger.info("    ✅ Oportunidad maker! Enviando...")
 
             if send_telegram(TG_USERNAME, build_maker_message(result, pct)):
@@ -415,43 +419,16 @@ def main():
 
             time.sleep(2)
 
-        # ── Estrategia Taker-Taker ────────────────────────────────────────────
-        # taker_buy  = precio al que compramos
-        # taker_sell = precio al que vendemos
-        if taker_sell > taker_buy:
-            cantidad_usdt = CAPITAL_COP["simulado"] / taker_buy
-            ganancia_bruta = (taker_sell - taker_buy) * cantidad_usdt
-            ganancia_cop = ganancia_bruta - (TAKER_FEE * taker_sell)
-            ganancia_pct = (taker_sell - taker_buy) / taker_buy * 100
-
-            logger.info(
-                f"    Taker | Compra: {taker_buy:,.2f} | "
-                f"Venta: {taker_sell:,.2f} | "
-                f"Ganancia: {ganancia_cop:,.0f} COP ({ganancia_pct:.3f}%)"
-            )
-
-            if ganancia_pct >= UMBRAL_PCT:
-                logger.info("    🟠 Oportunidad taker! Enviando...")
-
-                msg = build_taker_message(
-                    metodo,
-                    taker_buy,
-                    taker_sell,
-                    ganancia_cop,
-                    cantidad_usdt,
-                )
-
-                if send_telegram(TG_USERNAME, msg):
-                    alertas_enviadas += 1
-
-                time.sleep(2)
+        # Examine every pair: a headline price may have unusable limits or balance.
+        quote = best_taker_pair(buy_ads, sell_ads, CAPITAL_COP['simulado'],
+                                fixed_crypto_fee=TAKER_FEE)
+        if quote:
+            logger.info("    Taker | Neto %.4f%% | Capital %.0f COP", quote['net_pct'], quote['capital'])
+            if send_telegram(TG_USERNAME, build_taker_message(metodo, quote)):
+                alertas_enviadas += 1
+            time.sleep(2)
         else:
-            spread_taker = (taker_sell - taker_buy) / taker_buy * 100 if taker_buy > 0 else 0
-            logger.info(
-                f"    Taker | Sin oportunidad | "
-                f"Compra: {taker_buy:,.2f} | Venta: {taker_sell:,.2f} | "
-                f"Spread: {spread_taker:.4f}%"
-            )
+            logger.info("    Taker | Sin par operable con beneficio positivo después del costo fijo")
 
         # ── Guardar historial ─────────────────────────────────────────────────
         buy_price = result.buy_price_effective or taker_buy

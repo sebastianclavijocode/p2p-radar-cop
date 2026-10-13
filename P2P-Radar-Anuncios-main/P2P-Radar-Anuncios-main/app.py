@@ -22,6 +22,7 @@ from core.models import METHODS_CATALOG, SpreadResult
 from core.scanner import scan_all_methods
 from core.preferences import filter_catalog, hidden_method
 from core.spread import analyze_opportunity
+from core.p2p_alerts import cop_net, quote_pair
 from ui.cards import build_alerts_html, build_dashboard_html, build_feed_html, build_hero_html, build_kpi_html, build_telegram_html, build_taker_cards_html
 from ui.styles import GLASS_CSS
 from ui.table import render_chart, render_discarded_table, render_ok_table
@@ -602,6 +603,8 @@ def main() -> None:
     for r in results:
         if r.fiat != "COP" or asset != "USDT" or exchange_name != "Binance": continue
         if not r.ref_buy_ad or not r.ref_sell_ad: continue
+        verified_pair = quote_pair(r.ref_buy_ad, r.ref_sell_ad, capital_cop_taker, 0.0, TAKER_FEE_USDT)
+        if not verified_pair or verified_pair["profit"] <= 0:continue
         taker_buy  = r.ref_buy_ad.price
         taker_sell = r.ref_sell_ad.price
         if taker_sell <= taker_buy: continue
@@ -624,13 +627,17 @@ def main() -> None:
 
         # Calcular con capital operable real
         cantidad_usdt_real  = capital_operable_cop / taker_buy if capital_operable_cop > 0 else 0
-        ganancia_real_cop   = (taker_sell - taker_buy) * cantidad_usdt_real - (TAKER_FEE_USDT * taker_sell) if cantidad_usdt_real > 0 else 0
+        ganancia_real_cop   = verified_pair["profit"]
+        cantidad_usdt_real  = verified_pair["quantity"]
+        capital_operable_cop = capital_cop_taker
+        taker_taker_posible = True
+        buy_ok = sell_ok = True
 
         # Calcular con capital configurado
         cantidad_usdt_cfg   = capital_cop_taker / taker_buy
-        ganancia_cfg_cop    = (taker_sell - taker_buy) * cantidad_usdt_cfg - (TAKER_FEE_USDT * taker_sell)
+        ganancia_cfg_cop    = verified_pair["profit"]
 
-        ganancia_pct = (taker_sell - taker_buy) / taker_buy * 100
+        ganancia_pct = verified_pair["net_pct"]
 
         # Oportunidad híbrida Taker-Maker:
         # Si el precio taker de compra es más barato que el mejor precio maker,
@@ -640,7 +647,7 @@ def main() -> None:
         hibrido_pct      = (maker_sell_price - taker_buy) / taker_buy * 100 - (maker_fee_pct * 100) - (TAKER_FEE_USDT * taker_buy / capital_cop_taker * 100)
         hibrido_posible  = hibrido_pct > 0
 
-        if ganancia_pct >= max(min_net, 0.0):
+        if verified_pair["profit"] > 0:
             taker_ops.append({
                 "method_human":          r.method_human,
                 "fiat":                  r.fiat,
@@ -784,6 +791,7 @@ def main() -> None:
     # ── TAB: TELEGRAM ─────────────────────────────────────────────────────────
     with tab_tg:
         _section("🤖", "Alertas automáticas por Telegram")
+        st.caption("Maker-maker COP: neto superior a 0,25% después de cubrir al menos 0,50% de comisión total. Taker-taker: sin umbral porcentual; límites y saldo del anuncio deben permitir la operación.")
 
         with st.expander("⚙️ Configurar CallMeBot para Telegram", expanded=True):
             st.markdown(
@@ -798,9 +806,9 @@ def main() -> None:
                 placeholder="Sebastian_Clavijo",
                 key="tg_token"
             )
-            tg_umbral  = st.slider("📊 Umbral mínimo para alertar (% ganancia neta)", 0.10, 5.0, 0.50, 0.05, key="tg_umbral",
+            tg_umbral  = st.slider("📊 Umbral mínimo para alertar (% ganancia neta)", 0.25, 5.0, 0.25, 0.05, key="tg_umbral",
                                    format="%.2f%%",
-                                   help="Solo se envían alertas cuando la brecha supera este porcentaje.")
+                                   help="En COP se exige un neto superior a 0,25% después de cubrir al menos 0,50% de comisión total.")
             tg_solo_cop = st.checkbox("🇨🇴 Solo alertar métodos COP", value=True, key="tg_solo_cop")
             tg_intervalo = st.selectbox(
                 "⏱️ Revisar automáticamente cada",
@@ -817,21 +825,21 @@ def main() -> None:
             def pays(ad):
                 if not ad or not ad.payment_methods: return "—"
                 return ", ".join([m for m in ad.payment_methods if m][:5])
-            pct = r.net_profit_pct or 0
+            pct = cop_net(r)
             sep = "─" * 28
             return (
-                f"🤖 ALERTA P2P RADAR\n"
+                f"🤖 ALERTA MAKER-MAKER · PUBLICAR ANUNCIOS\n"
                 f"{sep}\n"
-                f"💰 Ganancia neta: {pct:.2f}%\n"
+                f"💰 Ganancia neta estimada: {pct:.4f}%\n"
                 f"💱 {r.method_human} ({r.fiat})\n"
                 f"{sep}\n"
-                f"📗 COMPRAR (tab Comprar)\n"
+                f"📗 Tu VENTA publicada (referencia tab Comprar)\n"
                 f"👤 {buy.advertiser_name if buy else '—'}\n"
                 f"💵 Precio: {_fmt(r.buy_price_effective, r.fiat)} / {r.asset}\n"
                 f"🔴 Límite: {f'{buy.min_amount:,.0f}' if buy else '—'} – {f'{buy.max_amount:,.0f}' if buy else '—'} {r.fiat}\n"
                 f"💳 Métodos: {pays(buy)}\n"
                 f"{sep}\n"
-                f"📕 VENDER (tab Vender)\n"
+                f"📕 Tu COMPRA publicada (referencia tab Vender)\n"
                 f"👤 {sell.advertiser_name if sell else '—'}\n"
                 f"💵 Precio: {_fmt(r.sell_price_effective, r.fiat)} / {r.asset}\n"
                 f"🔴 Límite: {f'{sell.min_amount:,.0f}' if sell else '—'} – {f'{sell.max_amount:,.0f}' if sell else '—'} {r.fiat}\n"
@@ -904,12 +912,12 @@ def main() -> None:
                     st.session_state["last_update"] = _dt.now()
                     fresh_ok = [r for r in fresh_res if r.status == "OK"]
                 except Exception as e:
-                    fresh_ok = ok_results  # fallback a datos anteriores si falla
+                    fresh_ok = []  # Never alert from stale data when a fresh query fails.
                     st.session_state["auto_alert_log"].insert(0, f"⚠️ {_dt.now().strftime('%H:%M:%S')} — Error actualizando: {e}")
 
                 candidatos = [
                     r for r in fresh_ok
-                    if (r.net_profit_pct or 0) >= tg_umbral
+                    if cop_net(r) > max(tg_umbral,0.25)
                     and (not tg_solo_cop or r.fiat == "COP")
                 ]
                 nuevos = [r for r in candidatos if r.method_id not in st.session_state["auto_alert_sent_ids"]]
@@ -942,7 +950,7 @@ def main() -> None:
         _section("📤", "Envío manual")
         alert_results = [
             r for r in ok_results
-            if (r.net_profit_pct or 0) >= tg_umbral
+            if cop_net(r) > max(tg_umbral,0.25)
             and (not tg_solo_cop or r.fiat == "COP")
         ]
         col_send, col_test = st.columns(2)
