@@ -102,9 +102,14 @@ def run_queries(
     ex_key = exchange_name.lower()
     results: List[SpreadResult] = []
     catalog = METHODS_CATALOG + extra_methods
+    bybit_groups, bybit_error = {}, None
     if exchange_name == "Bybit":
-        catalog = [{"id":"bybit_cop", "human_name":"COP · todos los métodos Bybit", "fiat":"COP"}]
-        mappings = {"bybit":{"bybit_cop":{"payment_ids":[],"available":True}}}
+        catalog = bybit_ex.payment_catalog()
+        if selected_fiats is None or 'COP' in selected_fiats:
+            try:
+                catalog, bybit_groups = bybit_ex.fetch_payment_groups(asset, top_n, merchant_check)
+            except Exception as exc:
+                bybit_error = exc
 
     catalog=filter_catalog(catalog,selected_fiats,excluded_methods)
     for method in catalog:
@@ -152,8 +157,13 @@ def run_queries(
         method_mapped = ", ".join(pay_ids) if pay_ids else "—"
 
         try:
-            buy_ads  = exchange_mod.fetch_ads(asset=asset, fiat=fiat, trade_type="BUY",  pay_types=pay_ids, rows=top_n, merchant_check=merchant_check)
-            sell_ads = exchange_mod.fetch_ads(asset=asset, fiat=fiat, trade_type="SELL", pay_types=pay_ids, rows=top_n, merchant_check=merchant_check)
+            if exchange_name == 'Bybit':
+                if bybit_error is not None: raise bybit_error
+                buy_ads = bybit_groups[mid]['BUY']
+                sell_ads = bybit_groups[mid]['SELL']
+            else:
+                buy_ads  = exchange_mod.fetch_ads(asset=asset, fiat=fiat, trade_type="BUY",  pay_types=pay_ids, rows=top_n, merchant_check=merchant_check)
+                sell_ads = exchange_mod.fetch_ads(asset=asset, fiat=fiat, trade_type="SELL", pay_types=pay_ids, rows=top_n, merchant_check=merchant_check)
         except Exception as exc:
             logger.error(f"{exchange_name} [{mid}]: {exc}\n{traceback.format_exc()}")
             results.append(_stub("ERROR", str(exc)[:120])); continue
@@ -411,6 +421,7 @@ def main() -> None:
         with st.expander("Monedas y métodos que uso",expanded=True):
             selected_fiats=st.multiselect('Monedas del radar P2P',['COP','USD','EUR','ARS','UYU'],default=['COP','USD','EUR'],key='cfg-p2p-fiats')
             catalog=METHODS_CATALOG+st.session_state.get('custom_methods',[])
+            catalog += bybit_ex.payment_catalog()
             catalog_by_id={m['id']:m for m in catalog}
             defaults=[m['id'] for m in catalog if 'prex' in m['human_name'].casefold() or 'mercado pago' in m['human_name'].casefold()]
             current=st.session_state.get('cfg-p2p-excluded-methods')
@@ -527,7 +538,7 @@ def main() -> None:
 
 
     if exchange_name == "Bybit":
-        st.info("Bybit consulta anuncios públicos sin utilizar claves y compara todos los métodos de pago. Revisa los métodos de cada anuncio antes de operar. Se respetan compra/venta, saldo y límites; el filtro de verificados incluye VA y BA.")
+        st.info("Bybit consulta anuncios públicos sin utilizar claves. Cada brecha se calcula por separado para el mismo método de pago: Nequi, Bancolombia, Daviplata y los demás disponibles. Se respetan compra/venta, saldo y límites; el filtro de verificados incluye VA y BA.")
         if not bybit_ex.is_supported():
             st.warning(bybit_ex.EXCHANGE_NOTE)
             st.code('BYBIT_API_KEY = "tu_clave"\nBYBIT_API_SECRET = "tu_secreto"', language="toml")
@@ -578,7 +589,7 @@ def main() -> None:
     if exchange_name == "Bybit":
         for message in dict.fromkeys(r.error_msg for r in results if r.status == "ERROR" and r.error_msg):
             st.error(message)
-        st.caption("Consulta COP con todos los métodos. Revisa los IDs de pago de cada anuncio antes de comparar operaciones.")
+        st.caption("Brechas COP separadas por método de pago. Se consultan hasta 300 anuncios por lado y se analizan los primeros de cada método según tu filtro. Los métodos sin nombre conocido aparecen con su ID de Bybit.")
     ok_results = [r for r in results if r.status == "OK"]
     disc_count = len(results) - len(ok_results)
 
