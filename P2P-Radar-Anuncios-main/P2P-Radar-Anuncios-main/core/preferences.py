@@ -2,7 +2,7 @@
 import json
 import re
 EXACT={'radar-view','capital_cfg','taker_cfg','maker_fees','mappings','custom_methods','saved-route-exclusions','saved-route-strategies','excluded-route-venues','route-strategies','auto_refresh_sel','scan_fiats','scan_min','scan_rows'}
-PREFIXES=('cfg-p2p-','cfg-rulo-','rulo-fee-','quote-volume-','fee_input_','csim_','taker_')
+PREFIXES=('cfg-p2p-','cfg-rulo-','rulo-fee-','quote-volume-','fee_input_','csim_','taker_','patient_')
 def clean_preferences(data):
     if not isinstance(data,dict):return {}
     result={}
