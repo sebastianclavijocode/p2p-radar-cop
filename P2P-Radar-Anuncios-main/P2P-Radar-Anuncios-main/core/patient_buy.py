@@ -1,7 +1,6 @@
 """Read-only planning for fixed-price maker buy advertisements."""
 import math
 from datetime import datetime, timezone, timedelta
-from statistics import median
 
 
 def positive(value):
@@ -51,11 +50,10 @@ def plan_levels(current_buy, discount_pct, points, now):
     levels = []
     for name, factor, fraction in [('Cerca del mercado',0.5,0.35),('Intermedia',1,0.20),('Más baja',1.75,0.10)]:
         target = current_buy*(1-discount_pct*factor/100)
-        if prices:
-            target = min(target, quantile(prices,fraction))
         # Round down so the displayed fixed price always stays below the current bid.
         target = math.floor(target*100)/100
         levels.append({'name':name, 'price':target, 'discount':(1-target/current_buy)*100,
+                       'historical_reference':quantile(prices,fraction) if prices else None,
                        'observed_pct':100*sum(p<=target for p in prices)/len(prices) if prices else None})
     return levels, usable
 
