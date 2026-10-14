@@ -685,10 +685,11 @@ def main() -> None:
 
     # ── VISTAS SECUNDARIAS (tabs debajo del dashboard) ────────────────────────
     st.markdown("<div style='margin-top:20px'></div>", unsafe_allow_html=True)
-    tab_scan, tab_tg, tab_hold, tab_calc, tab_heat, tab_table, tab_disc, tab_diag = st.tabs([
+    tab_scan, tab_tg, tab_hold, tab_patient, tab_calc, tab_heat, tab_table, tab_disc, tab_diag = st.tabs([
         "🔁 Escaneo",
         "📱 Telegram",
         "🔵 Hold",
+        "🎯 Compra paciente",
         "🧮 Calculadora",
         "🌡️ Mapa de calor",
         "📊 Tabla",
@@ -1145,6 +1146,11 @@ def main() -> None:
 
             if not any(len(d.get("registros", [])) >= 2 for d in history_data.values()):
                 st.info("⏳ Acumulando datos... Volvé en unas horas para ver el análisis completo.")
+
+    with tab_patient:
+        from ui.patient_buy import render as render_patient
+        render_patient(results,history_data,exchange_name,asset,caps.get('COP',{}).get('simulado',0),
+                       max(0,_time.time()-st.session_state.get('last_auto_refresh',0)))
 
     # ── TAB: CALCULADORA 🧮 ───────────────────────────────────────────────────
     with tab_calc:
