@@ -35,6 +35,16 @@ def test_stale_or_sparse_history_does_not_influence_prices_or_show_frequency():
     assert not usable and levels[1]['price']==3184
 
 
+def test_discount_changes_target_even_when_historical_zones_are_lower_and_equal():
+    points=[{'time':NOW-timedelta(minutes=i),'buy':3156,'sell':3180} for i in range(12,0,-1)]
+    less,_=plan_levels(3180.90,0.25,points,NOW)
+    more,_=plan_levels(3180.90,0.35,points,NOW)
+    assert less[1]['price']==3172.94 and more[1]['price']==3169.76
+    assert all(a['price']>b['price'] for a,b in zip(less,more))
+    assert all(p['historical_reference']==3156 for p in less+more)
+    assert len({p['price'] for p in less})==3
+
+
 def test_costs_are_included_in_quantity_break_even_and_adverse_scenario():
     result=scenario(2000000,3153.3,3170,0.25,0.25,500)
     assert result['quantity']==pytest.approx(2000000/(3153.3*1.0025))
