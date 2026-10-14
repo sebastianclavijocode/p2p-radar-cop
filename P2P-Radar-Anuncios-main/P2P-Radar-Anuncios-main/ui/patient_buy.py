@@ -33,18 +33,22 @@ def render(results, history, exchange, asset, capital, age_seconds):
     discount = c1.number_input('Descuento base sobre la referencia (%)',min_value=0.01,max_value=10.0,value=0.35,step=0.05,key='patient_discount')
     published = c2.number_input('Mi precio publicado (COP por USDT, opcional)',min_value=0.0,value=0.0,step=0.1,format='%.2f',key='patient_published_'+exchange+'_'+method)
     levels, usable = plan_levels(current,discount,points,now)
+    st.caption('El precio fijo se calcula desde Compradores ahora: descuento base × 0,5 para Cerca, × 1 para Intermedia y × 1,75 para Más baja. Cambiar el descuento recalcula los tres niveles.')
     cols = st.columns(3)
     cols[0].metric('Compradores ahora',f'{current:,.2f} COP')
     cols[1].metric('Capital del radar (COP)',f'{capital:,.0f}')
     cols[2].metric('Registros recientes',len(points))
     if usable:
         latest = points[-1]['time'].astimezone(ZoneInfo('America/Bogota')).strftime('%d/%m %H:%M')
-        st.caption(f'Historial del mismo método: Binance USDT/COP · último registro {latest}, hora de Colombia. Los niveles combinan tu descuento con zonas bajas del historial.')
+        st.caption(f'Historial del mismo método: Binance USDT/COP · último registro {latest}, hora de Colombia. Las zonas históricas se muestran aparte como referencia para revisar tu precio.')
     else:
         st.info('Sin historial reciente suficiente para este exchange y método. Los niveles usan únicamente el descuento sobre la cotización actual; no se toma prestado el historial de otro exchange.')
     table = [{'Nivel':p['name'],'Precio fijo (COP/USDT)':p['price'],'Debajo de compradores (%)':round(p['discount'],3),
+              'Zona histórica (COP/USDT)':p['historical_reference'],
               'Registros con referencia igual o menor (%)':round(p['observed_pct'],1) if p['observed_pct'] is not None else None} for p in levels]
-    st.dataframe(pd.DataFrame(table),hide_index=True,width='stretch')
+    st.dataframe(pd.DataFrame(table),hide_index=True,width='stretch',column_config={
+        'Precio fijo (COP/USDT)':st.column_config.NumberColumn(format='%.2f'),
+        'Zona histórica (COP/USDT)':st.column_config.NumberColumn(format='%.2f')})
     st.caption('Ese porcentaje describe cotizaciones pasadas; no mide órdenes ejecutadas ni la probabilidad de que te compren. Un precio más bajo puede quedar sin recibir operaciones.')
     profile = st.radio('Nivel de espera',[p['name'] for p in levels],index=1,horizontal=True,key='patient_profile')
     target = next(p['price'] for p in levels if p['name']==profile)
