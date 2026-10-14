@@ -35,7 +35,7 @@ def render(results, history, exchange, asset, capital, age_seconds):
     levels, usable = plan_levels(current,discount,points,now)
     cols = st.columns(3)
     cols[0].metric('Compradores ahora',f'{current:,.2f} COP')
-    cols[1].metric('Capital del radar',f'{capital:,.0f} COP')
+    cols[1].metric('Capital del radar (COP)',f'{capital:,.0f}')
     cols[2].metric('Registros recientes',len(points))
     if usable:
         latest = points[-1]['time'].astimezone(ZoneInfo('America/Bogota')).strftime('%d/%m %H:%M')
@@ -53,6 +53,7 @@ def render(results, history, exchange, asset, capital, age_seconds):
     if published:
         st.caption(f'Tu anuncio: {published:,.2f} COP · ajuste al objetivo: {target-published:+,.2f} COP por USDT. La app no cambia el anuncio.')
     st.markdown('**Si compras a ese precio, ¿a cuánto necesitas vender después?**')
+    st.caption(f'Los cálculos siguientes usan el precio objetivo del nivel: {target:,.2f} COP por USDT.')
     with st.expander('Comisiones y costos de este plan',expanded=False):
         f1,f2,f3 = st.columns(3)
         buy_fee = f1.number_input('Comisión de compra (%)',min_value=0.0,max_value=10.0,value=0.25,step=0.01,key='patient_buy_fee')
