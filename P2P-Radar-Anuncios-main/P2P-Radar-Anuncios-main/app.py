@@ -695,7 +695,7 @@ def main() -> None:
         "📊 Tabla",
         f"🗑️ Descartadas ({disc_count})",
         "🔬 Diagnóstico",
-    ])
+    ],key='cfg-p2p-active-tab',on_change='rerun')
 
     # ── TAB: ESCANEO AUTOMÁTICO ───────────────────────────────────────────────
     with tab_scan:
